@@ -37,54 +37,18 @@ worktree_path() {
 
 worktree_branch() { printf 'mode/%s\n' "$1"; }
 
-# build_lock_acquire -> 0 when the checkout-wide build lock is held by us
-# All worktrees drive the SAME module directories and one ~/.m2, so two
-# concurrent builds overwrite each other's target/ trees and install the same
-# GAVs over one another. That corrupts silently rather than failing, so the
-# lock is a hard gate, not a warning.
-#
-# The lock is a SYMLINK whose target is the holder's pid, not a directory
-# with a pid file inside it. `ln -s` is a single atomic syscall that creates
-# the link AND sets its content in one step — there is no window where the
-# lock exists but its owner is not yet recorded. A directory-based lock
-# (`mkdir "$BUILD_LOCK"` then a SEPARATE `printf > "$BUILD_LOCK/pid"`) has
-# exactly that window: a rival that reads the pid file between those two
-# steps sees it empty, concludes the holder is dead, and steals a lock that
-# is in fact being actively (and successfully) claimed right now. Verified
-# empirically under 10-way concurrency: the mkdir-based recreate step
-# admitted 2 simultaneous "winners" in real runs; ln -s does not, because a
-# rival can never observe a symlink after it exists but before its target is
-# set — those two things happen in the same kernel call. `mkdir` remains
-# unusable here for a different reason (no flock(1) on macOS), but the same
-# atomicity gap applies to it just as much as to any other create-then-
-# populate sequence.
-# A second, content-free mutex used ONLY to serialize the decide-whether-
-# stale-and-maybe-replace section below. Why a lock needs its own lock:
-# reading the holder and then acting on that reading are two separate steps,
-# so between them some OTHER racer's reading of the SAME state can also
-# conclude "stale". If each racer independently vacates $BUILD_LOCK to
-# inspect it (moving it aside, checking, and putting it back when it turns
-# out to still be live), $BUILD_LOCK is briefly, genuinely ABSENT from the
-# filesystem during that inspection — and any OTHER racer's plain `ln -s`
-# fast-path above can slip into exactly that gap and legitimately succeed,
-# becoming an accidental second winner even though neither racer did
-# anything wrong in isolation. Verified empirically: exactly this sequence
-# (a straggler seizes an already-reclaimed live lock, finds it alive, and
-# while putting it back, a third racer's fast path fills the momentary
-# vacancy) admitted 2 winners in a 10-way race in 4 of 100 runs.
-# This arbiter closes that gap by ensuring only ONE racer is ever inside the
-# "read, then maybe replace" section at a time, so $BUILD_LOCK itself is
-# NEVER made absent: the section either does nothing (still live) or
-# installs its replacement with the single atomic rename below.
 # Derived fresh inside the function (not as a fixed top-level default): tests
 # reassign $BUILD_LOCK after sourcing this file, and a default computed only
 # once at source time would keep pointing at the ORIGINAL path forever.
 build_lock_acquire() {
+  # The only case this must get right is the honest mistake: a second build
+  # started while one is genuinely running (two terminals, a forgotten
+  # background job). `ln -s` is atomic and fails if the lock exists, so that
+  # case is decided race-free with no further machinery.
   if ln -s "$$" "$BUILD_LOCK" 2>/dev/null; then
     return 0
   fi
-  # Held. If the holder is gone, the lock is stale and may be taken —
-  # otherwise a crashed build wedges the checkout permanently.
+
   local holder
   holder="$(readlink "$BUILD_LOCK" 2>/dev/null || echo '')"
   if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
@@ -93,51 +57,29 @@ build_lock_acquire() {
     return 1
   fi
 
-  # Possibly stale — but that reading can itself go stale before we act on
-  # it, so gate everything past this point behind the arbiter. The arbiter
-  # carries no content (only its existence matters), so unlike the main
-  # lock it cannot be "empty but claimed" — a crashed holder is told apart
-  # from a slow one purely by age, which is safe here because the section
-  # it guards is a handful of local filesystem calls and never blocks.
-  local arbiter="$BUILD_LOCK.steal-arbiter"
-  if ! mkdir "$arbiter" 2>/dev/null; then
-    local age
-    age="$(( $(date +%s) - $(stat -f %m "$arbiter" 2>/dev/null || echo "$(date +%s)") ))"
-    if [ "$age" -lt 5 ]; then
-      return 1
-    fi
-    rmdir "$arbiter" 2>/dev/null   # best-effort; if this loses to another
-                                   # reclaimer, the mkdir below is the real gate
-    mkdir "$arbiter" 2>/dev/null || return 1
-  fi
-
-  # Sole owner of the arbiter from here on: no other racer's steal logic can
-  # be running concurrently, so nothing else can move $BUILD_LOCK out from
-  # under this section. Re-read fresh — the earlier reading may already be
-  # out of date by the time the arbiter was won.
-  holder="$(readlink "$BUILD_LOCK" 2>/dev/null || echo '')"
-  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
-    rmdir "$arbiter" 2>/dev/null
-    log_error "another build is running in this checkout (pid $holder)"
-    log_error "modes share module directories and ~/.m2; concurrent builds corrupt each other"
+  # Stale: the holder is gone, so a previous build crashed. Reclaim it
+  # best-effort.
+  #
+  # This step is deliberately NOT race-free, and that is a considered choice
+  # rather than an oversight. Making it so needs a compare-and-swap the
+  # filesystem does not offer: every check-then-act sequence available here
+  # (rm+mkdir, mv-aside, an arbiter lock) can have the checked state change
+  # underneath it. Three separate designs were built and measured, and each
+  # admitted multiple winners under contention — 39/40, ~4/100 and 110/120
+  # trials respectively.
+  #
+  # Reaching it requires a prior crash AND two builds racing to recover from
+  # it. The project's stated working practice is that modes are never built
+  # concurrently, so paying for that with an unbounded amount of subtle
+  # locking machinery is the wrong trade. If concurrent builds ever become
+  # real, the answer is a proper lock daemon or an flock-capable platform,
+  # not more shell.
+  log_warn "reclaiming a stale build lock from pid ${holder:-unknown} (previous build crashed?)"
+  rm -f "$BUILD_LOCK"
+  ln -s "$$" "$BUILD_LOCK" 2>/dev/null || {
+    log_error "failed to reclaim the stale build lock"
     return 1
-  fi
-
-  # Genuinely stale. Prepare the replacement off to the side, then install
-  # it with ONE atomic rename: `mv` onto an existing SYMLINK (unlike onto an
-  # existing directory, which it moves itself inside rather than replacing —
-  # confirmed empirically) replaces it outright, so $BUILD_LOCK is never
-  # observably absent even for this final step.
-  local candidate="$BUILD_LOCK.candidate.$$.$RANDOM.$RANDOM"
-  ln -s "$$" "$candidate"
-  if ! mv "$candidate" "$BUILD_LOCK" 2>/dev/null; then
-    rm -f "$candidate"
-    rmdir "$arbiter" 2>/dev/null
-    log_error "failed to install the reclaimed build lock"
-    return 1
-  fi
-  log_warn "reclaimed a stale build lock from pid ${holder:-unknown}"
-  rmdir "$arbiter" 2>/dev/null
+  }
   return 0
 }
 
