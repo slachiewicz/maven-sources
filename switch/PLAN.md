@@ -1227,14 +1227,82 @@ grep -c "core/maven-4.0.x" .repo/manifests/default.xml
 
 Expected: `master`, and `1`.
 
-- [ ] **Step 4: Sync**
+- [ ] **Step 3a: Repair `.repo/manifests` if `repo init` fails**
+
+`repo init -b master` deletes the old local branch in `.repo/manifests` before creating the new
+one, and can abort in between — leaving `HEAD` pointing at a `refs/heads/<old>` that no longer
+exists, with `rev-parse HEAD` failing. Project worktrees are untouched by `repo init`, so this is
+repairable forward:
+
+```bash
+cd /Users/slachiewicz/mvn4/.repo/manifests
+git update-ref refs/heads/master refs/remotes/origin/master
+git symbolic-ref HEAD refs/heads/master
+git reset --hard master
+```
+
+Then re-run Step 3. Note `repo` may keep the local branch *named* `default` while setting
+`merge = refs/heads/master`; that is normal. Verify by content, not by branch name:
+`grep -c "core/maven-4.0.x" .repo/manifests/default.xml` must be 1.
+
+- [ ] **Step 3b: Displace `misc/gh-actions-shared` before syncing**
+
+The master manifest replaces the project at `misc/gh-actions-shared` with two projects *nested
+inside that same path*, `misc/gh-actions-shared/{main,v4}`. `repo` creates the children, which
+makes the parent look dirty, and then refuses to remove it:
+`error: misc/gh-actions-shared: Cannot remove project: uncommitted changes are present.`
+This blocks the whole sync. Move the old project aside first — its `include-option` branch
+carries local-only work, so confirm the bundle restores before moving:
+
+```bash
+cd /tmp && rm -rf ghas-check
+git clone --mirror ~/mvn4-archive/misc_gh-actions-shared.bundle ghas-check
+git -C ghas-check rev-parse include-option
+git -C /Users/slachiewicz/mvn4/misc/gh-actions-shared rev-parse include-option   # must match
+mkdir -p ~/mvn4-archive/displaced
+mv /Users/slachiewicz/mvn4/misc/gh-actions-shared ~/mvn4-archive/displaced/gh-actions-shared
+```
+
+- [ ] **Step 4: Sync — `--detach` is mandatory**
 
 ```bash
 cd /Users/slachiewicz/mvn4
-repo sync -j8 2>&1 | tail -40
+repo sync --detach -j8 2>&1 | tail -20
 ```
 
-Expected: the 15 new projects are fetched. `repo` will report the 17 projects no longer in the manifest; if it declines to remove them because they hold local branches, that is fine — they are archived, and leaving the directories in place is harmless since the aggregator will not reference them.
+**Do not run a plain `repo sync`.** Nine projects change manifest revision from `master` to their
+`-3.x` line (the five `plugins/core/*`, two `plugins/packaging/*`, two `shared/*`). A plain sync
+tries to *rebase the checked-out branch onto the new revision* — rebasing the Maven 4 line onto
+the 3.x line — which conflicts in `pom.xml` for every one of them and leaves each repository
+mid-rebase. Recovery is `git rebase --abort` per repository, but `--detach` avoids it entirely.
+
+If a plain sync was already run, clear the wreckage before retrying:
+
+```bash
+cd /Users/slachiewicz/mvn4
+for d in plugins/core/maven-clean-plugin plugins/core/maven-compiler-plugin \
+         plugins/core/maven-deploy-plugin plugins/core/maven-install-plugin \
+         plugins/core/maven-resources-plugin plugins/packaging/maven-jar-plugin \
+         plugins/packaging/maven-source-plugin shared/archiver shared/filtering; do
+  gd="$(git -C "$d" rev-parse --absolute-git-dir)"
+  if [ -d "$gd/rebase-merge" ] || [ -d "$gd/rebase-apply" ]; then
+    git -C "$d" rebase --abort
+  fi
+done
+```
+
+`--absolute-git-dir` matters: `--git-dir` returns a path relative to the repository, so testing
+`[ -d "$(git -C "$d" rev-parse --git-dir)/rebase-merge" ]` from the checkout root silently
+reports every repository as clean when they are not.
+
+- [ ] **Step 4a: Restore the tooling branch**
+
+`repo sync --detach` detaches every project, including `sources`. The commits are safe on the
+branch; the working tree simply is not showing them. Restore it:
+
+```bash
+git -C /Users/slachiewicz/mvn4/sources switch mvn-switch-tooling
+```
 
 - [ ] **Step 5: Write the verification script**
 
