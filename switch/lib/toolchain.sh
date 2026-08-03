@@ -31,14 +31,22 @@ TOOLCHAIN_SHA512='4.0.0-rc-5 942c19fb75ab7a5d2a11001e3d6c8c6214c81d2736ebc613243
 toolchain_maven_home() {
   local version="$1"
 
+  local home
+
   if [ "$version" = "system" ]; then
     command -v mvn >/dev/null 2>&1 || die "no 'mvn' on PATH and mode requests the system Maven"
     # Ask Maven itself rather than guessing from the launcher's location.
-    mvn -v 2>/dev/null | awk -F': ' '/^Maven home/ { print $2; exit }'
+    # Capture into a variable rather than letting the pipeline print directly:
+    # if `mvn -v` ever lacks a "Maven home:" line (wrapper script, changed
+    # format, locale), awk prints nothing and the pipeline still exits 0, so the
+    # caller would silently receive an empty string instead of a Maven home.
+    home="$(mvn -v 2>/dev/null | awk -F': ' '/^Maven home/ { print $2; exit }')"
+    [ -n "$home" ] || die "could not parse 'Maven home:' from 'mvn -v' output"
+    printf '%s\n' "$home"
     return 0
   fi
 
-  local home="$TOOLCHAIN_DIR/apache-maven-$version"
+  home="$TOOLCHAIN_DIR/apache-maven-$version"
   if [ -x "$home/bin/mvn" ]; then
     printf '%s\n' "$home"
     return 0
@@ -69,9 +77,26 @@ toolchain_maven_home() {
     die "SHA-512 mismatch for $file: expected $expected, got $actual"
   fi
 
-  tar -xzf "$tmp/$file" -C "$TOOLCHAIN_DIR"
+  # Extract into a staging directory, then rename into place. Extracting
+  # straight into $TOOLCHAIN_DIR is not atomic: a tar interrupted midway (kill,
+  # disk full) can leave bin/mvn — an early, small entry in the stream —
+  # present while jars are still missing, and the `[ -x "$home/bin/mvn" ]`
+  # short-circuit above would then trust that partial install forever, with no
+  # further checksum ever run.
+  local stage="$TOOLCHAIN_DIR/.staging-$version.$$"
+  rm -rf "$stage"
+  mkdir -p "$stage"
+  if ! tar -xzf "$tmp/$file" -C "$stage"; then
+    rm -rf "$tmp" "$stage"
+    die "failed to extract $file"
+  fi
   rm -rf "$tmp"
-  [ -x "$home/bin/mvn" ] || die "extracted archive did not produce $home/bin/mvn"
+  if [ ! -x "$stage/apache-maven-$version/bin/mvn" ]; then
+    rm -rf "$stage"
+    die "extracted archive did not produce apache-maven-$version/bin/mvn"
+  fi
+  mv "$stage/apache-maven-$version" "$home"
+  rm -rf "$stage"
   printf '%s\n' "$home"
 }
 
@@ -86,5 +111,10 @@ toolchain_activate() {
 # toolchain_current -> resolved Maven home, or empty
 toolchain_current() {
   [ -L "$TOOLCHAIN_DIR/current" ] || return 0
-  cd -P "$TOOLCHAIN_DIR/current" 2>/dev/null && pwd
+  # The subshell is load-bearing. This file is sourced, so a bare `cd` in a
+  # function body changes the CALLER's working directory. `mvn-switch` calls
+  # this from cmd_status and then does further relative work; a leaked cd would
+  # corrupt it in a way that is painful to debug. Safe for every call style,
+  # not only command substitution.
+  ( cd -P "$TOOLCHAIN_DIR/current" 2>/dev/null && pwd )
 }
