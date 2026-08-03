@@ -560,4 +560,56 @@ test_apply_archives_before_deleting() {
   assert_eq "  keep-me" "$(git -C "$d" branch --list keep-me)" "kept branch"
 }
 
+. "$LIB_DIR/worktree.sh"
+
+test_worktree_path_is_a_sibling_of_sources() {
+  assert_eq "$(dirname "$SOURCES_DIR")/sources-mvn4" "$(worktree_path mvn4)" "worktree path"
+}
+
+test_worktree_path_rejects_unknown_mode() {
+  local rc
+  # worktree_path delegates to mode_path, which dies (exit 1) on an unknown
+  # mode. `exit` inside a function is NOT caught by the caller's `&&`/`||` —
+  # it terminates the whole process, which here is the test runner itself.
+  # A subshell is load-bearing: it contains that exit to the subshell alone,
+  # the same way every other die-reaching call in this suite is invoked
+  # either as a real subprocess or inside `(...)`, never in-process.
+  ( worktree_path no-such-mode >/dev/null 2>&1 ) && rc=0 || rc=$?
+  [ "$rc" -ne 0 ] || fail "worktree_path must reject an unknown mode"
+}
+
+test_worktree_branch_name() {
+  assert_eq "mode/mvn4" "$(worktree_branch mvn4)" "branch name"
+}
+
+test_build_lock_is_exclusive() {
+  local held
+  BUILD_LOCK="$TMP_ROOT/lock"
+  build_lock_acquire || fail "first acquire must succeed"
+  # A second acquirer, simulating another worktree, must be refused while held.
+  held="$( BUILD_LOCK="$TMP_ROOT/lock" bash -c '
+    . '"$LIB_DIR"'/common.sh; . '"$LIB_DIR"'/worktree.sh
+    build_lock_acquire >/dev/null 2>&1 && echo ACQUIRED || echo BLOCKED' )"
+  assert_eq "BLOCKED" "$held" "second concurrent build"
+  build_lock_release
+}
+
+test_build_lock_is_released_and_reacquirable() {
+  BUILD_LOCK="$TMP_ROOT/lock2"
+  build_lock_acquire || fail "acquire"
+  build_lock_release
+  build_lock_acquire || fail "must be re-acquirable after release"
+  build_lock_release
+}
+
+test_build_lock_steals_a_stale_lock() {
+  # A crashed build must not wedge the checkout forever. A lock whose recorded
+  # PID is no longer alive is stale and may be taken.
+  BUILD_LOCK="$TMP_ROOT/lock3"
+  mkdir -p "$BUILD_LOCK"
+  echo 999999 > "$BUILD_LOCK/pid"      # a PID that cannot be running
+  build_lock_acquire || fail "a stale lock must be stealable"
+  build_lock_release
+}
+
 run_all
