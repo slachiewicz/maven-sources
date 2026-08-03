@@ -32,11 +32,11 @@ under the License.
 
   <name>Aggregator POM for Core Plugins</name>
   <modules>
-    <module>../../../../plugins/core/maven-clean-plugin</module>
-    <module>../../../../plugins/core/maven-compiler-plugin</module>
-    <module>../../../../plugins/core/maven-deploy-plugin</module>
-    <module>../../../../plugins/core/maven-install-plugin</module>
-    <module>../../../../plugins/core/maven-resources-plugin</module>
+    <!--module>../../../../plugins/core/maven-clean-plugin</module-->
+    <!--module>../../../../plugins/core/maven-compiler-plugin</module-->
+    <!--module>../../../../plugins/core/maven-deploy-plugin</module-->
+    <!--module>../../../../plugins/core/maven-install-plugin</module-->
+    <!--module>../../../../plugins/core/maven-resources-plugin</module-->
     <module>../../../../plugins/core/maven-site-plugin</module>
     <module>../../../../plugins/core/surefire</module>
   </modules>

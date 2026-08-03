@@ -34,12 +34,12 @@ under the License.
   <modules>
     <module>../../../../plugins/packaging/maven-ear-plugin</module>
     <module>../../../../plugins/packaging/maven-ejb-plugin</module>
-    <module>../../../../plugins/packaging/maven-jar-plugin</module>
+    <!--module>../../../../plugins/packaging/maven-jar-plugin</module-->
     <module>../../../../plugins/packaging/maven-rar-plugin</module>
     <module>../../../../plugins/packaging/maven-war-plugin</module>
     <module>../../../../plugins/packaging/maven-acr-plugin</module>
     <module>../../../../plugins/packaging/maven-shade-plugin</module>
-    <module>../../../../plugins/packaging/maven-source-plugin</module>
+    <!--module>../../../../plugins/packaging/maven-source-plugin</module-->
     <module>../../../../plugins/packaging/maven-jlink-plugin</module>
     <module>../../../../plugins/packaging/maven-jmod-plugin</module>
   </modules>
