@@ -1792,8 +1792,9 @@ Expected: failure sourcing `lib/cleanup.sh` — `No such file or directory`.
 
 # cleanup_classify REPODIR -> BRANCH|CLASS|SHA|LOCALONLY|DATE|SUBJECT
 cleanup_classify() {
-  local d="$1" current branch sha localonly date subject class
+  local d="$1" current head_sha branch sha localonly date subject class
   current="$(git -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+  head_sha="$(git -C "$d" rev-parse HEAD 2>/dev/null || echo '')"
 
   git -C "$d" for-each-ref --format='%(refname:short)' refs/heads/ | while read -r branch; do
     sha="$(git -C "$d" rev-parse "$branch")"
@@ -1802,7 +1803,13 @@ cleanup_classify() {
     date="$(git -C "$d" log -1 --format=%cs "$branch")"
     subject="$(git -C "$d" log -1 --format=%s "$branch" | tr '|' '/')"
 
-    if [ "$branch" = "$current" ]; then
+    if [ "$branch" = "$current" ] \
+       || { [ "$current" = "HEAD" ] && [ -n "$head_sha" ] && [ "$sha" = "$head_sha" ]; }; then
+      # `rev-parse --abbrev-ref HEAD` reads back the literal string "HEAD" in
+      # a detached repo — the normal state after `repo sync --detach`, true
+      # for 131 of 132 repos here. No branch name matches that, so without
+      # the SHA fallback the current-branch guard is silently a no-op almost
+      # everywhere.
       class=current
     elif [ "$localonly" -eq 0 ]; then
       class=redundant
