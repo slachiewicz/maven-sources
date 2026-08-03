@@ -2064,7 +2064,11 @@ test_worktree_path_is_a_sibling_of_sources() {
 
 test_worktree_path_rejects_unknown_mode() {
   local rc
-  worktree_path no-such-mode >/dev/null 2>&1 && rc=0 || rc=$?
+  # The subshell is load-bearing. worktree_path -> mode_path -> die -> exit 1,
+  # and an `exit` inside a sourced function is NOT caught by the caller's
+  # `&&`/`||` — it terminates the whole test runner, which then silently
+  # truncates mid-suite instead of reporting a failure.
+  ( worktree_path no-such-mode ) >/dev/null 2>&1 && rc=0 || rc=$?
   [ "$rc" -ne 0 ] || fail "worktree_path must reject an unknown mode"
 }
 
