@@ -33,9 +33,10 @@ MANIFEST="$ARCHIVE_DIR/MANIFEST.txt"
 # out after listing only a handful of projects. Override via env if the
 # manifest legitimately drops below it.
 MIN_REPOS="${MIN_REPOS:-100}"
-
-mkdir -p "$ARCHIVE_DIR"
-: > "$MANIFEST"
+# Override to proceed despite uncommitted/untracked work in some repository.
+# Bundles capture committed objects only, so a deliberate run with this set
+# means that work will NOT be in the archive.
+ALLOW_DIRTY="${ALLOW_DIRTY:-0}"
 
 cd "$CHECKOUT_ROOT"
 
@@ -75,6 +76,41 @@ if [ "$discovered" -lt "$MIN_REPOS" ]; then
   echo "Refusing to report success — this looks like a partial failure, not a real shrink of the manifest." >&2
   exit 1
 fi
+
+# Bundles capture committed objects only. `repo` removing an obsolete project
+# directory (as the migration in Task 6 does) takes a dirty worktree with it,
+# and that migration is irreversible — so a dirty repository here is not
+# something this script can silently accept. Checked as its own pass, before
+# any bundle is written, so a refusal here never leaves a half-populated
+# archive directory behind.
+if [ "$ALLOW_DIRTY" != "1" ]; then
+  dirty_repos=""
+  while read -r path; do
+    [ -d "$path/.git" ] || [ -f "$path/.git" ] || continue
+    if ! porcelain=$(git -C "$path" status --porcelain 2>&1); then
+      dirty_repos="${dirty_repos}${path} (status check failed: $porcelain)"$'\n'
+      continue
+    fi
+    [ -n "$porcelain" ] && dirty_repos="${dirty_repos}${path}"$'\n'
+  done < "$list_file"
+  if [ -n "$dirty_repos" ]; then
+    echo "ERROR: the following repositories have uncommitted or untracked changes:" >&2
+    printf '%s' "$dirty_repos" >&2
+    echo "Bundles capture committed objects only; proceeding would risk losing this work when 'repo' removes an obsolete project directory during the (irreversible) migration in Task 6." >&2
+    echo "Set ALLOW_DIRTY=1 to proceed anyway, acknowledging that dirty work will not be archived." >&2
+    exit 1
+  fi
+else
+  echo "WARN: ALLOW_DIRTY=1 set; skipping the dirty-worktree check. Uncommitted or untracked work in any repository will NOT be captured by these bundles." >&2
+fi
+
+# Only now, after every validation check has passed, do we create the archive
+# directory and truncate the manifest. Doing this earlier meant an aborted run
+# left a zero-byte MANIFEST.txt beside bundles from a previous good run: the
+# archive directory looked plausible while describing nothing, and Task 6's
+# migration gate reads this file.
+mkdir -p "$ARCHIVE_DIR"
+: > "$MANIFEST"
 
 meta_fail_count=0
 bundle_fail_count=0
