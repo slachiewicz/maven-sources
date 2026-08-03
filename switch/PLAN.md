@@ -2346,7 +2346,11 @@ runtime="$(mode_runtime "$(mode_path "$MODE")")"
 build_lock_acquire || exit 1
 # NOT `exec`: exec replaces this shell and the EXIT trap never runs, leaking
 # the lock and wedging every other worktree until a stale-steal.
-trap build_lock_release EXIT
+# EXIT alone appears to cover SIGINT in bash, but two independent tests of
+# that disagreed, and job-control semantics differ with and without a
+# controlling TTY. Trapping INT and TERM explicitly costs nothing and removes
+# the ambiguity, so a Ctrl-C never leaves the lock behind.
+trap build_lock_release EXIT INT TERM
 
 home="$(toolchain_maven_home "$runtime")"
 log_info "mode $MODE  ->  $home"
