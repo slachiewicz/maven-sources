@@ -207,6 +207,64 @@ Maven's launcher resolves its home through the symlinked directory correctly.
 `./mvn-switch status` prints the active mode, the resolved `mvn -v`, and any module whose
 active/commented state disagrees with the active mode.
 
+## Worktree layout (supersedes in-place switching)
+
+Decided 2026-08-03, after the switcher was working. In-place switching left mode state as an
+uncommitted diff in tracked aggregator POMs, so the tree was never clean while a mode was active
+and `git add -A` could fold a mode switch into an unrelated commit with no warning from git.
+
+Instead, each mode gets its own git worktree of `sources`, with its mode state **committed** on
+its own branch:
+
+```
+/Users/slachiewicz/mvn4/
+  sources/            branch mvn-switch-tooling   <- development, no mode applied
+  sources-mvn3/       branch mode/mvn3
+  sources-mvn4/       branch mode/mvn4
+  sources-mvn4-3x/    branch mode/mvn4-3xplugins
+```
+
+The directory *is* the mode. Nothing to switch, nothing dirty, and it is impossible to build the
+wrong configuration by forgetting to run a command.
+
+**Why a sibling path is mandatory.** The aggregator's module paths climb out of the `sources`
+repository entirely — `../../../core/maven`, `../../../../plugins/core-4/…` — and resolve against
+the checkout root. A worktree placed as a sibling of `sources/` sits at exactly the same depth, so
+every path still resolves; verified empirically against all module entries in `aggregator/core`,
+`aggregator/shared-4` and `aggregator/plugins/core-4`. A worktree placed anywhere else silently
+resolves modules to the wrong directories or to nothing.
+
+**Modes must never build concurrently.** This is the one respect in which the worktree layout is
+more dangerous than in-place switching, because three directories make parallel builds look
+possible. All three worktrees drive the *same* module directories under the checkout root and
+share one `~/.m2`, so two simultaneous builds write the same `target/` trees and install the same
+GAVs over each other. The `build` wrapper below takes an exclusive lock at the checkout root to
+make this impossible rather than merely discouraged.
+
+**Each worktree carries its own runtime.** `toolchain/` is gitignored, so each worktree has its
+own, and each pins the Maven its mode requires. This replaces the single shared
+`toolchain/current` symlink and the one-stable-PATH-entry scheme, which cannot express three
+simultaneous modes.
+
+**Building.** Each worktree carries a committed `build` script at its root:
+
+```sh
+cd sources-mvn4
+./build install -DskipTests
+```
+
+It resolves its own mode's Maven home, acquires the checkout-wide lock, and execs `mvn` with the
+remaining arguments. Plain `mvn` still works for anyone who sets `PATH` by hand, but without the
+concurrency guard.
+
+**Upkeep, stated plainly.** An upstream change to an aggregator POM — a new module, a removed one
+— must be replicated to all three mode branches. That is the standing cost of this layout, and it
+is the reason `mvn-switch` is kept: it validates that each mode branch's committed state still
+matches its mode file, so drift is detected rather than discovered at build time.
+
+`mvn-switch` remains the tool for creating, refreshing and validating the worktrees, and for
+ad-hoc switching inside the main `sources` tree.
+
 ## Branch cleanup
 
 `./mvn-switch cleanup [--apply]` — a separate subcommand that never runs as part of a switch.
