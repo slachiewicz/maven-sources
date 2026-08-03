@@ -2096,6 +2096,27 @@ test_build_lock_is_released_and_reacquirable() {
   build_lock_release
 }
 
+test_stale_lock_steal_admits_exactly_one_winner() {
+  # The steal path is where a naive rm -rf + mkdir loses exclusivity: several
+  # processes can each conclude the lock is stale and each end up believing
+  # they hold it. Race many stealers against one stale lock; exactly one may
+  # win. This is probabilistic, so use enough contenders to make a broken
+  # implementation fail reliably.
+  BUILD_LOCK="$TMP_ROOT/lock4"
+  mkdir -p "$BUILD_LOCK"
+  echo 999999 > "$BUILD_LOCK/pid"
+  : > "$TMP_ROOT/wins"
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    ( . "$LIB_DIR/common.sh"
+      . "$LIB_DIR/worktree.sh"
+      BUILD_LOCK="$TMP_ROOT/lock4"
+      build_lock_acquire >/dev/null 2>&1 && echo win >> "$TMP_ROOT/wins" ) &
+  done
+  wait
+  assert_eq "1" "$(grep -c win "$TMP_ROOT/wins" 2>/dev/null || echo 0)" "stealers admitted"
+}
+
 test_build_lock_steals_a_stale_lock() {
   # A crashed build must not wedge the checkout forever. A lock whose recorded
   # PID is no longer alive is stale and may be taken.
@@ -2158,10 +2179,24 @@ build_lock_acquire() {
     log_error "modes share module directories and ~/.m2; concurrent builds corrupt each other"
     return 1
   fi
-  log_warn "removing stale build lock from pid ${holder:-unknown}"
-  rm -rf "$BUILD_LOCK"
-  mkdir "$BUILD_LOCK" 2>/dev/null || return 1
+  # Stale. Claim it atomically. An unconditional `rm -rf` followed by `mkdir`
+  # is NOT atomic: two processes can both find the same stale lock, both
+  # decide to steal, and the second's `rm -rf` then deletes the directory the
+  # first just created — leaving BOTH believing they hold the lock, which is
+  # precisely the concurrent build this exists to prevent.
+  # `mv` of a directory is atomic, so at most one racer moves the stale lock
+  # aside; and the final `mkdir` is the single point that decides the winner,
+  # whether or not this process won the rename.
+  local stash="$BUILD_LOCK.stale.$$"
+  if mv "$BUILD_LOCK" "$stash" 2>/dev/null; then
+    rm -rf "$stash"
+  fi
+  if ! mkdir "$BUILD_LOCK" 2>/dev/null; then
+    log_error "lost the race to reclaim a stale build lock; another build won it"
+    return 1
+  fi
   printf '%s\n' "$$" > "$BUILD_LOCK/pid"
+  log_warn "reclaimed a stale build lock from pid ${holder:-unknown}"
   return 0
 }
 
