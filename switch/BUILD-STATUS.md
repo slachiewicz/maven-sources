@@ -54,7 +54,7 @@ were never attempted. Fixing that one module should recover all 12.
 ### Reproducing
 
 ```sh
-cd ~/mvn4/sources-mvn3
+cd ~/mvn5/sources-mvn3
 ./build install -DskipTests --fail-at-end
 ```
 

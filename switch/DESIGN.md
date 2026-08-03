@@ -193,7 +193,7 @@ mode-dependent candidates.
 entry to `PATH`, once:
 
 ```sh
-export PATH="$HOME/mvn4/sources/toolchain/current/bin:$PATH"
+export PATH="$HOME/mvn5/sources/toolchain/current/bin:$PATH"
 ```
 
 Thereafter plain `mvn` in `sources/aggregator` uses whichever runtime the active mode selected;
@@ -217,11 +217,11 @@ Instead, each mode gets its own git worktree of `sources`, with its mode state *
 its own branch:
 
 ```
-/Users/slachiewicz/mvn4/
+/Users/slachiewicz/mvn5/
   sources/            branch mvn-switch-tooling   <- development, no mode applied
   sources-mvn3/       branch mode/mvn3
   sources-mvn4/       branch mode/mvn4
-  sources-mvn4-3x/    branch mode/mvn4-3xplugins
+  sources-mvn4-3xplugins/  branch mode/mvn4-3xplugins
 ```
 
 The directory *is* the mode. Nothing to switch, nothing dirty, and it is impossible to build the

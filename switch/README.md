@@ -7,7 +7,7 @@ nothing left dirty.
 ## Everyday use
 
 ```sh
-cd ~/mvn4/sources-mvn3            # or sources-mvn4, sources-mvn4-3xplugins
+cd ~/mvn5/sources-mvn3            # or sources-mvn4, sources-mvn4-3xplugins
 ./build install -DskipTests
 ```
 
@@ -27,11 +27,11 @@ don't build there.
 ## Switching modes
 
 Just `cd` to a different directory. But the three modes share the module directories under
-`~/mvn4/` and one `~/.m2`, so clean before you switch:
+`~/mvn5/` and one `~/.m2`, so clean before you switch:
 
 ```sh
-cd ~/mvn4/sources-mvn3 && ./build clean
-cd ~/mvn4/sources-mvn4 && ./build install -DskipTests
+cd ~/mvn5/sources-mvn3 && ./build clean
+cd ~/mvn5/sources-mvn4 && ./build install -DskipTests
 ```
 
 **Never build two modes at once.** They write the same `target/` trees and install the same
@@ -45,14 +45,14 @@ for why.
 Works, but you lose the lock and must pick the Maven yourself:
 
 ```sh
-cd ~/mvn4/sources-mvn4/aggregator
+cd ~/mvn5/sources-mvn4/aggregator
 ../toolchain/current/bin/mvn install -DskipTests
 ```
 
 ## Checking state
 
 ```sh
-cd ~/mvn4/sources-mvn4
+cd ~/mvn5/sources-mvn4
 ./mvn-switch status        # active mode, resolved mvn -v, and any drift
 ```
 
@@ -66,7 +66,7 @@ An upstream change to an aggregator POM — a module added or removed — has to
 mode branches. They are ordinary branches off `mvn-switch-tooling`:
 
 ```sh
-cd ~/mvn4/sources-mvn3
+cd ~/mvn5/sources-mvn3
 git rebase mvn-switch-tooling
 ./mvn-switch status        # confirm the mode still applies cleanly
 ```
@@ -79,7 +79,7 @@ failure, so run it after any rebase.
 `sources/` is where the tooling itself is worked on.
 
 ```sh
-cd ~/mvn4/sources
+cd ~/mvn5/sources
 bash switch/test/run-tests.sh     # 38 tests, no Maven needed
 ./mvn-switch list                 # available modes and their runtimes
 ./mvn-switch mvn4 --dry-run       # what a mode would change, writes nothing
