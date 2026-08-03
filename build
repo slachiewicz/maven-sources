@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+# Build this worktree's mode. The directory is the mode: the aggregator state
+# is already committed, so there is nothing to switch.
+#
+#   ./build install -DskipTests
+#
+# Takes a checkout-wide lock first: every mode drives the same module
+# directories and one ~/.m2, so two builds at once corrupt each other silently.
+
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SELF_DIR/switch/lib/common.sh"
+. "$SELF_DIR/switch/lib/toolchain.sh"
+. "$SELF_DIR/switch/lib/worktree.sh"
+
+[ -f "$SELF_DIR/.switch-mode" ] || die "not a mode worktree: no .switch-mode here (run 'mvn-switch worktrees --create')"
+MODE="$(cat "$SELF_DIR/.switch-mode")"
+
+runtime="$(mode_runtime "$(mode_path "$MODE")")"
+[ -n "$runtime" ] || die "mode '$MODE' has no [runtime] maven value"
+
+build_lock_acquire || exit 1
+# NOT `exec`: exec replaces this shell and the EXIT trap never runs, leaking
+# the lock and wedging every other worktree until a stale-steal.
+trap build_lock_release EXIT
+
+home="$(toolchain_maven_home "$runtime")"
+log_info "mode $MODE  ->  $home"
+"$home/bin/mvn" "$@"
