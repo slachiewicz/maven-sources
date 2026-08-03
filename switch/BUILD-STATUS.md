@@ -11,8 +11,8 @@ Maven 3.9.16 (system), `sources-mvn3`, cold build (no `target/`, warm `~/.m2`).
 |---|---|
 | Result | **BUILD FAILURE** |
 | Wall clock | 16:49 |
-| Modules in reactor | 341 |
-| SUCCESS | **324** |
+| Modules in reactor | 345 |
+| SUCCESS | **328** |
 | FAILURE | 5 |
 | SKIPPED | 12 (all collateral — wagon providers blocked by `wagon-provider-test`) |
 
