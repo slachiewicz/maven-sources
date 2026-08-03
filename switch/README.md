@@ -18,8 +18,8 @@ checkout-wide lock. Everything after `./build` is passed straight through to Mav
 | Directory | Core | Plugins / shared | Maven |
 |---|---|---|---|
 | `sources-mvn3` | `core/3.x/*` (3.10.0-SNAPSHOT) | 3.x lines | system 3.9.16 |
-| `sources-mvn4` | `core/maven-4.0.x` (4.0.0-SNAPSHOT) | `-4` lines | 4.0.0-rc-5 |
-| `sources-mvn4-3xplugins` | `core/maven-4.0.x` | 3.x lines | 4.0.0-rc-5 |
+| `sources-mvn4` | `core/maven-4.0.x` (4.0.0-SNAPSHOT) | `-4` lines | 4.0.0-rc-6 |
+| `sources-mvn4-3xplugins` | `core/maven-4.0.x` | 3.x lines | 4.0.0-rc-6 |
 
 `sources/` itself is the development tree. It carries the tooling and has **no mode applied** —
 don't build there.

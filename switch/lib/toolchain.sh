@@ -25,7 +25,11 @@ TOOLCHAIN_DIR="$SOURCES_DIR/toolchain"
 # Known-good SHA-512 of apache-maven-<version>-bin.tar.gz, one entry per line
 # as "<version> <sha512>". Pinning here means a mirror cannot feed us a
 # different archive than the one this plan was verified against.
-TOOLCHAIN_SHA512='4.0.0-rc-5 942c19fb75ab7a5d2a11001e3d6c8c6214c81d2736ebc613243d22f7b4ab0404092d47511317d767e8f22a1c634a3762cc7e6b4b6693580ac86e73c0bed1bee2'
+# Older versions stay listed: dlcdn carries only the current release, but the
+# archive.apache.org fallback still serves them, so a mode file pinned to an
+# earlier RC keeps working.
+TOOLCHAIN_SHA512='4.0.0-rc-6 3fba58e1c345a5aa1dbacfa7aceaf7b1a0fa9626e368eec4814fa7a7ebf0fe74f0e41481faef77f95d8738f9c1365f918c8b8c94d7c28656f067db61a8af7f2e
+4.0.0-rc-5 942c19fb75ab7a5d2a11001e3d6c8c6214c81d2736ebc613243d22f7b4ab0404092d47511317d767e8f22a1c634a3762cc7e6b4b6693580ac86e73c0bed1bee2'
 
 # toolchain_maven_home VERSION -> absolute Maven home
 toolchain_maven_home() {

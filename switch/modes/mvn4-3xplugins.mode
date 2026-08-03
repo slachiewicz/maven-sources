@@ -1,6 +1,6 @@
 # Maven 4.0.x core running an all-3.x plugin and shared-component set.
 [runtime]
-maven = 4.0.0-rc-5
+maven = 4.0.0-rc-6
 
 [modules]
 # core

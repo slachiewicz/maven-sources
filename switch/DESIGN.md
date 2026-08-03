@@ -53,8 +53,8 @@ the tree aligned with upstream.
 | Mode | Runtime | Core | Plugin/shared trees |
 |---|---|---|---|
 | `mvn3` | Maven 3.9.16 (system) | `core/3.x/*` | `plugins/core`, `plugins/packaging`, `shared` |
-| `mvn4` | Maven 4.0.0-rc-5 | `core/maven-4.0.x` | `plugins/core-4`, `plugins/packaging-4`, `shared-4` (+ the reporting/tools plugins, which have no 4-native line) |
-| `mvn4-3xplugins` | Maven 4.0.0-rc-5 | `core/maven-4.0.x` | `plugins/core`, `plugins/packaging`, `shared` |
+| `mvn4` | Maven 4.0.0-rc-6 | `core/maven-4.0.x` | `plugins/core-4`, `plugins/packaging-4`, `shared-4` (+ the reporting/tools plugins, which have no 4-native line) |
+| `mvn4-3xplugins` | Maven 4.0.0-rc-6 | `core/maven-4.0.x` | `plugins/core`, `plugins/packaging`, `shared` |
 
 In each, `cd sources/aggregator && mvn install -DskipTests` should build the tree.
 
@@ -151,7 +151,7 @@ Plain INI-ish text, parsed with `case`/`read` — no external dependency.
 ```ini
 # modes/mvn4.mode
 [runtime]
-maven = 4.0.0-rc-5
+maven = 4.0.0-rc-6
 
 [modules]
 # + activate, - comment out
@@ -200,7 +200,7 @@ Thereafter plain `mvn` in `sources/aggregator` uses whichever runtime the active
 Maven's launcher resolves its home through the symlinked directory correctly.
 
 - `mvn3` → the system Maven home (`/opt/homebrew/Cellar/maven/3.9.16/libexec`).
-- `mvn4`, `mvn4-3xplugins` → `toolchain/apache-maven-4.0.0-rc-5`, downloaded from
+- `mvn4`, `mvn4-3xplugins` → `toolchain/apache-maven-4.0.0-rc-6`, downloaded from
   `dlcdn.apache.org` (falling back to `archive.apache.org`) and verified against the published
   `.sha512` before use.
 
@@ -307,8 +307,10 @@ scope of a switcher.
 
 Known facts to keep in view:
 
-- Maven 4.0.0 GA is not released; `4.0.0-rc-5` is the newest published version and is what the
-  4-native plugins target (`mavenVersion` `4.0.0-rc-4`/`rc-5`).
+- Maven 4.0.0 GA is not released; `4.0.0-rc-6` is the newest published version and is the one the
+  `mvn4` modes run. The 4-native plugin sources in this checkout still target an older
+  `mavenVersion` (`4.0.0-beta-3` through `rc-5`) — that is upstream's business, and the runtime
+  the modes pick is deliberately independent of it.
 - Local branch names in this tree are not trustworthy — `core/maven`'s local `maven-4.0.x`
   tracks `origin/master` and carries `4.1.0-SNAPSHOT`. After migration the *manifest* supplies
   `core/maven-4.0.x` as a separate directory, so this stops mattering.

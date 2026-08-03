@@ -611,4 +611,41 @@ test_build_lock_steals_a_stale_lock() {
   build_lock_release
 }
 
+# --- The shipped mode files and the shipped SHA-512 pin table must agree.
+# Bumping a mode's `[runtime] maven` without adding the matching hash is the
+# obvious way to break this tooling on a Maven release, and it fails late:
+# `./build` dies only once someone actually runs it, in the mode worktree,
+# after the aggregator lock has been taken. Checking it here makes the same
+# mistake fail in the suite instead. Reads the REAL files, not fixtures —
+# that is the point.
+test_shipped_modes_have_a_pinned_toolchain_sha() {
+  local pins m name runtime sha
+  pins="$(bash -c '
+    . "$1/common.sh"
+    . "$1/toolchain.sh"
+    printf "%s\n" "$TOOLCHAIN_SHA512"
+  ' _ "$LIB_DIR")" || { fail "could not read TOOLCHAIN_SHA512 from lib/toolchain.sh"; return; }
+
+  for m in "$MODES_DIR"/*.mode; do
+    [ -f "$m" ] || continue
+    name="$(basename "$m" .mode)"
+    runtime="$(mode_runtime "$m")"
+    if [ -z "$runtime" ]; then
+      fail "mode $name has no [runtime] maven value"
+      continue
+    fi
+    # `system` is resolved from PATH and has nothing to verify.
+    [ "$runtime" = "system" ] && continue
+    sha="$(printf '%s\n' "$pins" | awk -v v="$runtime" '$1 == v { print $2; exit }')"
+    if [ -z "$sha" ]; then
+      fail "mode $name pins Maven $runtime, which has no entry in TOOLCHAIN_SHA512"
+      continue
+    fi
+    case "$sha" in
+      *[!0-9a-f]* | "") fail "SHA-512 for Maven $runtime is not lowercase hex: [$sha]" ;;
+      *) [ "${#sha}" -eq 128 ] || fail "SHA-512 for Maven $runtime is ${#sha} chars, expected 128" ;;
+    esac
+  done
+}
+
 run_all

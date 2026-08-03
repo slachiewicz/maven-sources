@@ -1,6 +1,6 @@
 # Maven 4 line: 4.0.x core, 4-native plugins and shared components where they exist.
 [runtime]
-maven = 4.0.0-rc-5
+maven = 4.0.0-rc-6
 
 [modules]
 # core
