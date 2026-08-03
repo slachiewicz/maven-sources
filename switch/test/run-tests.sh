@@ -24,6 +24,7 @@ set -uo pipefail
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$TEST_DIR/../lib"
+ROOT_DIR="$(cd "$TEST_DIR/../.." && pwd)"
 TMP_ROOT=""
 
 PASS=0
@@ -62,6 +63,14 @@ assert_file_contains() {
     return 0
   fi
   fail "expected $file to contain [$needle]"
+}
+
+assert_contains() {
+  local haystack="$1" needle="$2" what="${3:-string}"
+  case "$haystack" in
+    *"$needle"*) return 0 ;;
+  esac
+  fail "expected $what to contain [$needle], got [$haystack]"
 }
 
 run_all() {
@@ -251,6 +260,186 @@ test_set_module_leaves_other_lines_untouched() {
   assert_file_contains "$p" '    <module>../../../core/build-cache</module>'
   assert_file_contains "$p" '    <module>../../../core/wrapper</module>'
   assert_file_contains "$p" '    <!--<module>../../../svn/repository-tools</module>-->'
+}
+
+# --- C1 regression: a trailing comment on a [section] header must not fold
+# into the section name and swallow the whole section. This is exactly the
+# form DESIGN.md documented before the fix: "[modules]   # + activate, ...".
+test_mode_header_trailing_comment_still_parses_modules() {
+  cat > "$TMP_ROOT/c1.mode" <<'EOF'
+[runtime]
+maven = 4.0.0-rc-5
+
+[modules]                # + activate, - comment out
++ core-4
+- 3.x
+EOF
+  assert_eq "on|core-4
+off|3.x" "$(mode_modules "$TMP_ROOT/c1.mode")" "modules with trailing comment header"
+}
+
+test_runtime_header_trailing_comment_still_parses_runtime() {
+  cat > "$TMP_ROOT/c1r.mode" <<'EOF'
+[runtime]  # comment
+maven = 4.0.0-rc-5
+
+[modules]
++ core-4
+EOF
+  assert_eq "4.0.0-rc-5" "$(mode_runtime "$TMP_ROOT/c1r.mode")" "runtime with trailing comment header"
+}
+
+# --- CRLF mode files (e.g. checked out or edited on Windows) must parse
+# identically to LF ones.
+test_crlf_mode_file_parses() {
+  printf '[runtime]\r\nmaven = 4.0.0-rc-5\r\n\r\n[modules]\r\n+ core-4\r\n- 3.x\r\n' \
+    > "$TMP_ROOT/crlf.mode"
+  assert_eq "4.0.0-rc-5" "$(mode_runtime "$TMP_ROOT/crlf.mode")" "runtime crlf"
+  assert_eq "on|core-4
+off|3.x" "$(mode_modules "$TMP_ROOT/crlf.mode")" "modules crlf"
+}
+
+# --- toolchain_current under the caller's real `set -euo pipefail`, in the
+# three states that matter: unset, resolvable, and dangling. Run in a
+# sub-bash against a throwaway copy of the libraries so a leaked `cd` or an
+# `exit` cannot affect the test runner itself. SOURCES_DIR is derived from
+# BASH_SOURCE inside common.sh, so the libraries must be copied into a real
+# temporary tree rather than sourced in place with a faked variable.
+test_toolchain_current_survives_set_euo_pipefail() {
+  local tree="$TMP_ROOT/tc-tree"
+  mkdir -p "$tree/switch/lib"
+  cp "$LIB_DIR/common.sh" "$tree/switch/lib/common.sh"
+  cp "$LIB_DIR/toolchain.sh" "$tree/switch/lib/toolchain.sh"
+  cp "$LIB_DIR/aggregator.sh" "$tree/switch/lib/aggregator.sh"
+
+  local out rc
+
+  # 1. no `current` symlink at all. Uses the SAME call shape as cmd_status
+  # (`home="$(toolchain_current)"`, a bare assignment) rather than passing the
+  # substitution as a printf argument: under `set -e`, bash propagates a
+  # command substitution's failure through a plain assignment statement, but
+  # NOT through a substitution embedded in another command's argument list —
+  # `printf "%s" "$(false)"` does not abort, `x="$(false)"` does. The real bug
+  # only shows up in the assignment form, so the test must use it too.
+  out="$(bash -c '
+    set -euo pipefail
+    . "$1/switch/lib/common.sh"
+    . "$1/switch/lib/toolchain.sh"
+    home="$(toolchain_current)"
+    printf "[%s]" "$home"
+  ' _ "$tree" 2>&1)" && rc=0 || rc=$?
+  assert_status 0 "$rc" "no-symlink case must not abort the caller"
+  assert_eq "[]" "$out" "no-symlink case yields empty"
+
+  # 2. a good symlink.
+  mkdir -p "$tree/toolchain/apache-maven-x"
+  ln -s apache-maven-x "$tree/toolchain/current"
+  out="$(bash -c '
+    set -euo pipefail
+    . "$1/switch/lib/common.sh"
+    . "$1/switch/lib/toolchain.sh"
+    toolchain_current
+  ' _ "$tree" 2>&1)" && rc=0 || rc=$?
+  assert_status 0 "$rc" "good-symlink case must not abort the caller"
+  # Compare against the physically resolved path too: on macOS $TMP_ROOT
+  # itself typically lives under /var, which is a symlink to /private/var, and
+  # `cd -P` inside toolchain_current resolves that as well.
+  local expected; expected="$(cd -P "$tree/toolchain/apache-maven-x" && pwd)"
+  assert_eq "$expected" "$out" "good-symlink case resolves"
+
+  # 3. a DANGLING symlink: passes -L, fails the cd. This is the case I2 fixed.
+  # Again use the bare-assignment call shape — this is the one that actually
+  # exercises the bug under `set -e`.
+  rm -f "$tree/toolchain/current"
+  ln -s apache-maven-does-not-exist "$tree/toolchain/current"
+  out="$(bash -c '
+    set -euo pipefail
+    . "$1/switch/lib/common.sh"
+    . "$1/switch/lib/toolchain.sh"
+    home="$(toolchain_current)"
+    printf "[%s]" "$home"
+  ' _ "$tree" 2>&1)" && rc=0 || rc=$?
+  assert_status 0 "$rc" "dangling-symlink case must not abort the caller"
+  assert_eq "[]" "$out" "dangling-symlink case yields empty"
+}
+
+# --- End-to-end fixture tree for the tests below: a throwaway copy of the
+# libraries, the entry point, and a fixture aggregator POM, wired together
+# exactly as the real checkout is (mvn-switch sources switch/lib/*.sh
+# relative to its own location; common.sh derives SOURCES_DIR the same way).
+make_e2e_tree() {
+  local tree="$TMP_ROOT/e2e-tree"
+  mkdir -p "$tree/switch/lib" "$tree/switch/modes" "$tree/aggregator"
+  cp "$LIB_DIR/common.sh"     "$tree/switch/lib/common.sh"
+  cp "$LIB_DIR/aggregator.sh" "$tree/switch/lib/aggregator.sh"
+  cp "$LIB_DIR/toolchain.sh"  "$tree/switch/lib/toolchain.sh"
+  cp "$ROOT_DIR/mvn-switch"   "$tree/mvn-switch"
+  chmod +x "$tree/mvn-switch"
+  cp "$TEST_DIR/fixtures/sample-pom.xml" "$tree/aggregator/pom.xml"
+  printf '%s\n' "$tree"
+}
+
+test_dry_run_end_to_end_writes_nothing() {
+  local tree; tree="$(make_e2e_tree)"
+
+  # Stub `mvn -v` so this test does not depend on a Maven being installed on
+  # the machine running it. cmd_apply's dry-run path still calls
+  # toolchain_maven_home for a `system` runtime, to report which home it
+  # would activate.
+  mkdir -p "$tree/stubbin"
+  cat > "$tree/stubbin/mvn" <<'STUB'
+#!/bin/sh
+if [ "$1" = "-v" ]; then
+  echo "Apache Maven 3.9.16 (stub)"
+  echo "Maven home: /stub/maven-home"
+  exit 0
+fi
+exit 1
+STUB
+  chmod +x "$tree/stubbin/mvn"
+
+  cat > "$tree/switch/modes/e2e.mode" <<'EOF'
+[runtime]
+maven = system
+
+[modules]
++ ../../../core/maven-4.0.x
+- ../../../core/maven
+EOF
+
+  local before after out rc
+  before="$(cat "$tree/aggregator/pom.xml")"
+  out="$(PATH="$tree/stubbin:$PATH" "$tree/mvn-switch" e2e --dry-run 2>&1)" && rc=0 || rc=$?
+  after="$(cat "$tree/aggregator/pom.xml")"
+
+  assert_status 0 "$rc" "dry-run exit status"
+  assert_eq "$before" "$after" "dry-run must not modify the aggregator POM"
+  [ -f "$tree/.switch-state" ] && fail "dry-run must not write .switch-state"
+  assert_contains "$out" "would set" "dry-run output"
+  assert_contains "$out" "maven-4.0.x" "dry-run output"
+}
+
+# --- I5 / cmd_apply zero-module guard: a mode file whose [modules] section
+# resolves to nothing must be refused, not silently applied as a no-op.
+test_zero_module_mode_is_refused_by_cmd_apply() {
+  local tree; tree="$(make_e2e_tree)"
+
+  cat > "$tree/switch/modes/empty.mode" <<'EOF'
+[runtime]
+maven = system
+
+[modules]
+EOF
+
+  local before after out rc
+  before="$(cat "$tree/aggregator/pom.xml")"
+  out="$("$tree/mvn-switch" empty 2>&1)" && rc=0 || rc=$?
+  after="$(cat "$tree/aggregator/pom.xml")"
+
+  [ "$rc" -ne 0 ] || fail "mvn-switch must exit non-zero for a zero-module mode"
+  assert_eq "$before" "$after" "zero-module mode must not modify the aggregator POM"
+  [ -f "$tree/.switch-state" ] && fail "zero-module mode must not write .switch-state"
+  assert_contains "$out" "resolved to no modules" "zero-module error message"
 }
 
 run_all
