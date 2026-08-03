@@ -40,7 +40,18 @@ mode_path() {
 # mode_runtime MODEFILE -> the [runtime] maven value
 mode_runtime() {
   awk '
-    /^[ \t]*\[/ { section = $0; gsub(/[][ \t]/, "", section); next }
+    { sub(/\r$/, "") }                      # tolerate CRLF mode files
+    /^[ \t]*\[/ {
+      # Take ONLY the bracketed name. Stripping brackets from the whole line
+      # folds a trailing comment into the section name, so `[modules]  # note`
+      # becomes "modules#note" and every module line is skipped — a mode that
+      # silently switches nothing while status reports a clean match.
+      section = $0
+      sub(/^[ \t]*\[/, "", section)
+      sub(/\].*$/, "", section)
+      gsub(/[ \t]/, "", section)
+      next
+    }
     section == "runtime" && /^[ \t]*maven[ \t]*=/ {
       sub(/^[^=]*=[ \t]*/, "")
       sub(/[ \t]+$/, "")
@@ -55,7 +66,18 @@ mode_modules() {
   awk '
     /^[ \t]*#/  { next }
     /^[ \t]*$/  { next }
-    /^[ \t]*\[/ { section = $0; gsub(/[][ \t]/, "", section); next }
+    { sub(/\r$/, "") }                      # tolerate CRLF mode files
+    /^[ \t]*\[/ {
+      # Take ONLY the bracketed name. Stripping brackets from the whole line
+      # folds a trailing comment into the section name, so `[modules]  # note`
+      # becomes "modules#note" and every module line is skipped — a mode that
+      # silently switches nothing while status reports a clean match.
+      section = $0
+      sub(/^[ \t]*\[/, "", section)
+      sub(/\].*$/, "", section)
+      gsub(/[ \t]/, "", section)
+      next
+    }
     section != "modules" { next }
     {
       sign = substr($1, 1, 1)

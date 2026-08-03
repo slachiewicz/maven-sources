@@ -84,6 +84,10 @@ cmd_apply() {
   # Resolve every module to its POM first, so a bad module aborts before any
   # file is written.
   read_modules "$modefile"
+  # A mode that resolves to zero modules is never legitimate — every mode is a
+  # complete description of the toggleable set. Refusing it turns any future
+  # parser gap into a loud failure instead of a silent no-op switch.
+  [ -s "$TMP_MODLIST" ] || die "mode '$mode' resolved to no modules at all; refusing to switch (check its [modules] section)"
   TMP_PLAN="$(mktemp)"
   while IFS='|' read -r want path; do
     [ -n "$path" ] || continue
