@@ -234,12 +234,21 @@ every path still resolves; verified empirically against all module entries in `a
 `aggregator/shared-4` and `aggregator/plugins/core-4`. A worktree placed anywhere else silently
 resolves modules to the wrong directories or to nothing.
 
-**Modes must never build concurrently.** This is the one respect in which the worktree layout is
-more dangerous than in-place switching, because three directories make parallel builds look
-possible. All three worktrees drive the *same* module directories under the checkout root and
-share one `~/.m2`, so two simultaneous builds write the same `target/` trees and install the same
-GAVs over each other. The `build` wrapper below takes an exclusive lock at the checkout root to
-make this impossible rather than merely discouraged.
+**Modes must never build concurrently.** All three worktrees drive the *same* module directories
+under the checkout root and share one `~/.m2`, so two simultaneous builds write the same
+`target/` trees and install the same GAVs over each other — silent corruption, not an error. The
+working practice this design assumes is one mode at a time, with `mvn clean` when switching.
+
+The `build` wrapper therefore carries an **advisory** lock, not a bulletproof mutex. It decides
+the case that actually occurs — a second build started while one is genuinely running — with a
+single atomic `ln -s`, which is race-free. Recovering a lock left by a *crashed* build is
+deliberately best-effort: making that race-free needs a compare-and-swap the filesystem does not
+offer, and three designs were built and measured admitting multiple winners under contention
+(rm+mkdir 39/40 trials, mv-aside ~4/100, arbiter-serialised 5/6 once the arbiter itself went
+stale; a fourth attempt failed 110/120). Reaching that path needs a prior crash *and* two builds
+racing to recover from it, so the complexity is not worth buying. If concurrent builds ever
+become a real requirement, the answer is a lock daemon or an `flock`-capable platform, not more
+shell.
 
 **Each worktree carries its own runtime.** `toolchain/` is gitignored, so each worktree has its
 own, and each pins the Maven its mode requires. This replaces the single shared
