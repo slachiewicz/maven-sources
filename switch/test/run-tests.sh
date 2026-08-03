@@ -442,4 +442,22 @@ EOF
   assert_contains "$out" "resolved to no modules" "zero-module error message"
 }
 
+# --- I4: agg_set_module must preserve the POM's file mode. mktemp creates its
+# temp file at 0600, and `mv` carries that mode onto the target, so without
+# the fix a switch silently resets every touched POM from 644 to 600. Git
+# tracks only the exec bit, so content-only assertions (the pre-existing
+# tests above) cannot catch this — it needs its own direct check of the mode
+# bits, read the BSD way since `stat --format` is GNU-only.
+test_set_module_preserves_file_mode() {
+  local p; p="$(fixture)"
+  chmod 644 "$p"
+  local before; before="$(stat -f %Lp "$p")"
+  assert_eq "644" "$before" "fixture must start at mode 644"
+
+  agg_set_module "$p" '../../../core/maven' off
+
+  local after; after="$(stat -f %Lp "$p")"
+  assert_eq "644" "$after" "POM mode after agg_set_module"
+}
+
 run_all
