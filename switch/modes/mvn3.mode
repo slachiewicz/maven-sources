@@ -1,0 +1,24 @@
+# Maven 3 line: 3.10.x core, all plugins and shared components on their 3.x branches.
+[runtime]
+maven = system
+
+[modules]
+# core
+- ../../../core/maven
+- ../../../core/maven-4.0.x
++ 3.x
+# core plugins: 3.x line on, 4-native line off
++ ../../../../plugins/core/maven-clean-plugin
++ ../../../../plugins/core/maven-compiler-plugin
++ ../../../../plugins/core/maven-deploy-plugin
++ ../../../../plugins/core/maven-install-plugin
++ ../../../../plugins/core/maven-resources-plugin
+- core-4
+# packaging plugins
++ ../../../../plugins/packaging/maven-jar-plugin
++ ../../../../plugins/packaging/maven-source-plugin
+- packaging-4
+# shared components
++ ../../../shared/archiver
++ ../../../shared/filtering
+- shared-4
