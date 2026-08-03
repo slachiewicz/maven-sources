@@ -602,12 +602,35 @@ test_build_lock_is_released_and_reacquirable() {
   build_lock_release
 }
 
+test_stale_lock_steal_admits_exactly_one_winner() {
+  # The steal path is where a naive rm -rf + mkdir loses exclusivity: several
+  # processes can each conclude the lock is stale and each end up believing
+  # they hold it. Race many stealers against one stale lock; exactly one may
+  # win. This is probabilistic, so use enough contenders to make a broken
+  # implementation fail reliably.
+  # The lock is a symlink whose target is the holder's pid; a plain
+  # directory-with-pid-file fixture here would not exercise the real code
+  # path at all (see worktree.sh's build_lock_acquire for why the
+  # representation changed).
+  BUILD_LOCK="$TMP_ROOT/lock4"
+  ln -s 999999 "$BUILD_LOCK"
+  : > "$TMP_ROOT/wins"
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    ( . "$LIB_DIR/common.sh"
+      . "$LIB_DIR/worktree.sh"
+      BUILD_LOCK="$TMP_ROOT/lock4"
+      build_lock_acquire >/dev/null 2>&1 && echo win >> "$TMP_ROOT/wins" ) &
+  done
+  wait
+  assert_eq "1" "$(grep -c win "$TMP_ROOT/wins" 2>/dev/null || echo 0)" "stealers admitted"
+}
+
 test_build_lock_steals_a_stale_lock() {
   # A crashed build must not wedge the checkout forever. A lock whose recorded
   # PID is no longer alive is stale and may be taken.
   BUILD_LOCK="$TMP_ROOT/lock3"
-  mkdir -p "$BUILD_LOCK"
-  echo 999999 > "$BUILD_LOCK/pid"      # a PID that cannot be running
+  ln -s 999999 "$BUILD_LOCK"           # a PID that cannot be running
   build_lock_acquire || fail "a stale lock must be stealable"
   build_lock_release
 }
