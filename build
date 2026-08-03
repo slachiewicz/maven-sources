@@ -49,4 +49,10 @@ trap build_lock_release EXIT INT TERM
 
 home="$(toolchain_maven_home "$runtime")"
 log_info "mode $MODE  ->  $home"
+
+# Run from the aggregator, not the worktree root: the root carries the
+# tooling and has no POM of its own. Doing this here means callers never
+# have to remember it, and never accidentally build from a directory whose
+# mode state is not the one they think.
+cd "$SELF_DIR/aggregator"
 "$home/bin/mvn" "$@"
