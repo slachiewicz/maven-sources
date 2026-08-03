@@ -2003,3 +2003,103 @@ git commit -m "switch: record per-mode build status and justified exclusions"
 **Known gap, deliberate.** `sources/.gitignore` is edited in Task 4 rather than Task 1, so the `toolchain/` directory is untracked only from Task 4 onward. Nothing writes to it before then, so this is safe.
 
 **Type consistency.** `agg_module_state`, `agg_set_module` and `agg_find_pom` keep the same signatures in Tasks 3, 5, 7 and 8. `mode_runtime`/`mode_modules` are consistent across Tasks 2, 5 and 8. `cleanup_classify`/`cleanup_apply`/`cleanup_main` are consistent between Task 9's tests and its implementation, and `cleanup_main` matches the dispatch already written in Task 5. `toolchain_maven_home`/`toolchain_activate`/`toolchain_current` are consistent between Tasks 4 and 5. Exit code 3 means "module not found" in both `agg_module_state` and `agg_find_pom`; `agg_find_pom` adds 4 for "ambiguous".
+
+---
+
+### Task 11: Per-mode git worktrees
+
+Supersedes in-place mode switching, per the decision recorded in DESIGN.md. Task 10's builds run
+from these worktrees, so this lands first.
+
+**Files:**
+- Create: `switch/lib/worktree.sh`
+- Create: `build` (committed at the worktree root, one copy, identical on every mode branch)
+- Modify: `mvn-switch` (add the `worktrees` subcommand)
+- Modify: `switch/test/run-tests.sh` (tests above the final `run_all`)
+
+**Interfaces:**
+- Consumes: `log_info`/`log_warn`/`die`/`SOURCES_DIR` from `common.sh`; `mode_path`/`mode_runtime`/`mode_modules` from `common.sh`; `agg_find_pom`/`agg_module_state`/`agg_set_module` from `aggregator.sh`; `toolchain_maven_home` from `toolchain.sh`.
+- Produces:
+  - `worktree_path MODE` — prints the sibling path for a mode (`<checkout root>/sources-<mode>`).
+  - `worktree_create MODE` — creates the worktree on branch `mode/<mode>` with the mode applied and committed.
+  - `worktree_verify MODE` — exits 0 when the worktree's committed state matches its mode file, non-zero with a drift report otherwise.
+  - `mvn-switch worktrees [--create|--verify]`.
+
+- [ ] **Step 1: Decide and record the naming, then write the failing tests**
+
+The worktree for mode `M` lives at `$(dirname "$SOURCES_DIR")/sources-<M>` — a **sibling of
+`sources/`**. This is not cosmetic: aggregator module paths resolve against the checkout root, so
+only a sibling sits at the correct depth. `worktree_path` must refuse any other location.
+
+Tests to add above the final `run_all`:
+
+```bash
+. "$LIB_DIR/worktree.sh"
+
+test_worktree_path_is_a_sibling_of_sources() {
+  local p; p="$(worktree_path mvn4)"
+  assert_eq "$(dirname "$SOURCES_DIR")/sources-mvn4" "$p" "worktree path"
+}
+
+test_worktree_path_rejects_unknown_mode() {
+  local rc
+  worktree_path no-such-mode >/dev/null 2>&1 && rc=0 || rc=$?
+  [ "$rc" -ne 0 ] || fail "worktree_path must reject an unknown mode"
+}
+
+test_build_wrapper_refuses_concurrent_builds() {
+  # Two builds against the same checkout must not overlap: they share module
+  # directories and one ~/.m2, so concurrent writes corrupt silently.
+  local lock="$TMP_ROOT/build.lock" out
+  ( flock 9 || exit 1; sleep 2 ) 9>"$lock" &
+  sleep 0.2
+  out="$( ( flock -n 9 && echo ACQUIRED || echo BLOCKED ) 9>"$lock" )"
+  wait
+  assert_eq "BLOCKED" "$out" "second concurrent build"
+}
+```
+
+- [ ] **Step 2: Run the tests and confirm they fail**
+
+Run: `bash switch/test/run-tests.sh`
+Expected: failure sourcing `switch/lib/worktree.sh` — no such file.
+
+- [ ] **Step 3: Write `switch/lib/worktree.sh`**
+
+```bash
+#!/usr/bin/env bash
+# <ASF licence header — copy verbatim from switch/lib/common.sh>
+#
+# Per-mode git worktrees. The directory is the mode: each worktree sits on a
+# `mode/<name>` branch with that mode's aggregator state committed, so nothing
+# needs switching and no working tree is left dirty.
+# This file is sourced, never executed.
+
+CHECKOUT_ROOT="$(dirname "$SOURCES_DIR")"
+
+# worktree_path MODE -> the sibling directory for MODE
+worktree_path() {
+  local mode="$1"
+  mode_path "$mode" >/dev/null    # dies if the mode does not exist
+  # A SIBLING of sources/ is mandatory. Aggregator modules are referenced as
+  # ../../../core/... and resolve against the checkout root, so a worktree at
+  # any other depth silently resolves modules to the wrong directories.
+  printf '%s/sources-%s\n' "$CHECKOUT_ROOT" "$mode"
+}
+
+# worktree_branch MODE -> the branch name carrying MODE's committed state
+worktree_branch() { printf 'mode/%s\n' "$1"; }
+```
+
+- [ ] **Step 4: Run the tests and confirm they pass**
+
+Run: `bash switch/test/run-tests.sh`
+Expected: all previous tests plus the three new ones pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /Users/slachiewicz/mvn4/sources
+git add switch/lib/worktree.sh switch/test/run-tests.sh
+git commit -m "switch: add per-mode worktree path and branch resolution"
+```
