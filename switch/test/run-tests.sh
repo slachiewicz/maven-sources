@@ -460,4 +460,65 @@ test_set_module_preserves_file_mode() {
   assert_eq "644" "$after" "POM mode after agg_set_module"
 }
 
+. "$LIB_DIR/cleanup.sh"
+
+# Build a throwaway repo with a fake "remote" so classification has something real to read.
+make_repo() {
+  local d="$TMP_ROOT/repo" up="$TMP_ROOT/upstream"
+  git init -q --bare "$up"
+  git init -q -b master "$d"
+  git -C "$d" config user.email t@example.com
+  git -C "$d" config user.name Test
+  git -C "$d" commit -q --allow-empty -m base
+  git -C "$d" remote add origin "$up"
+  git -C "$d" push -q origin master
+  git -C "$d" fetch -q origin
+
+  # redundant: points at a commit already on the remote
+  git -C "$d" branch redundant master
+
+  # local-only: a commit that was never pushed
+  git -C "$d" checkout -q -b keep-me master
+  git -C "$d" commit -q --allow-empty -m "unpushed work"
+
+  # stale dependabot: local commits, and no origin/<same name>
+  git -C "$d" checkout -q -b dependabot/maven/foo-1.0 master
+  git -C "$d" commit -q --allow-empty -m "bump foo"
+
+  git -C "$d" checkout -q master
+  printf '%s\n' "$d"
+}
+
+test_classify_marks_pushed_branch_redundant() {
+  local d; d="$(make_repo)"
+  assert_eq "redundant" "$(cleanup_classify "$d" | awk -F'|' '$1 == "redundant" { print $2 }')" "class"
+}
+
+test_classify_protects_unpushed_branch() {
+  local d; d="$(make_repo)"
+  assert_eq "local-only" "$(cleanup_classify "$d" | awk -F'|' '$1 == "keep-me" { print $2 }')" "class"
+}
+
+test_classify_marks_orphaned_dependabot_stale() {
+  local d; d="$(make_repo)"
+  assert_eq "stale-dependabot" "$(cleanup_classify "$d" | awk -F'|' '$1 ~ /^dependabot/ { print $2 }')" "class"
+}
+
+test_classify_never_touches_current_branch() {
+  local d; d="$(make_repo)"
+  assert_eq "current" "$(cleanup_classify "$d" | awk -F'|' '$1 == "master" { print $2 }')" "class"
+}
+
+test_apply_archives_before_deleting() {
+  local d; d="$(make_repo)"
+  cleanup_apply "$d" >/dev/null
+  # redundant is gone as a branch...
+  assert_eq "" "$(git -C "$d" branch --list redundant)" "redundant branch"
+  # ...but recoverable from its archive tag
+  assert_eq "refs/tags/archive/redundant" \
+    "$(git -C "$d" rev-parse --symbolic-full-name refs/tags/archive/redundant)" "archive tag"
+  # and local-only work survives untouched
+  assert_eq "  keep-me" "$(git -C "$d" branch --list keep-me)" "kept branch"
+}
+
 run_all
