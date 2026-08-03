@@ -2033,32 +2033,33 @@ from these worktrees, so this lands first.
 
 **Files:**
 - Create: `switch/lib/worktree.sh`
-- Create: `build` (committed at the worktree root, one copy, identical on every mode branch)
+- Create: `build` (worktree root; committed, identical on every mode branch)
 - Modify: `mvn-switch` (add the `worktrees` subcommand)
 - Modify: `switch/test/run-tests.sh` (tests above the final `run_all`)
 
 **Interfaces:**
-- Consumes: `log_info`/`log_warn`/`die`/`SOURCES_DIR` from `common.sh`; `mode_path`/`mode_runtime`/`mode_modules` from `common.sh`; `agg_find_pom`/`agg_module_state`/`agg_set_module` from `aggregator.sh`; `toolchain_maven_home` from `toolchain.sh`.
+- Consumes: `log_info`/`log_warn`/`die`/`SOURCES_DIR`/`mode_path`/`mode_runtime`/`mode_modules` from `common.sh`; `agg_find_pom`/`agg_module_state`/`agg_set_module` from `aggregator.sh`; `toolchain_maven_home` from `toolchain.sh`.
 - Produces:
-  - `worktree_path MODE` — prints the sibling path for a mode (`<checkout root>/sources-<mode>`).
-  - `worktree_create MODE` — creates the worktree on branch `mode/<mode>` with the mode applied and committed.
-  - `worktree_verify MODE` — exits 0 when the worktree's committed state matches its mode file, non-zero with a drift report otherwise.
-  - `mvn-switch worktrees [--create|--verify]`.
+  - `CHECKOUT_ROOT` — the directory containing `sources/`.
+  - `worktree_path MODE` / `worktree_branch MODE`.
+  - `worktree_create MODE` — creates the worktree on `mode/<MODE>` with the mode applied and committed.
+  - `worktree_verify MODE` — exit 0 when the worktree's committed state matches its mode file.
+  - `build_lock_acquire` / `build_lock_release`.
+  - `mvn-switch worktrees [--create|--verify|--list]`.
 
-- [ ] **Step 1: Decide and record the naming, then write the failing tests**
+**Two platform facts this task depends on, both verified on this machine:**
+- **`flock` does not exist on macOS.** Use an atomic `mkdir` lock; `mkdir` on an existing directory fails here, confirmed. Do not reach for `flock`, `lockfile`, or `shlock`.
+- **`exec mvn` would leak the lock**, because `exec` replaces the shell and the `EXIT` trap never fires. Run `mvn` as a child and let the trap release.
 
-The worktree for mode `M` lives at `$(dirname "$SOURCES_DIR")/sources-<M>` — a **sibling of
-`sources/`**. This is not cosmetic: aggregator module paths resolve against the checkout root, so
-only a sibling sits at the correct depth. `worktree_path` must refuse any other location.
+- [ ] **Step 1: Write the failing tests**
 
-Tests to add above the final `run_all`:
+Append above the final `run_all`:
 
 ```bash
 . "$LIB_DIR/worktree.sh"
 
 test_worktree_path_is_a_sibling_of_sources() {
-  local p; p="$(worktree_path mvn4)"
-  assert_eq "$(dirname "$SOURCES_DIR")/sources-mvn4" "$p" "worktree path"
+  assert_eq "$(dirname "$SOURCES_DIR")/sources-mvn4" "$(worktree_path mvn4)" "worktree path"
 }
 
 test_worktree_path_rejects_unknown_mode() {
@@ -2067,15 +2068,38 @@ test_worktree_path_rejects_unknown_mode() {
   [ "$rc" -ne 0 ] || fail "worktree_path must reject an unknown mode"
 }
 
-test_build_wrapper_refuses_concurrent_builds() {
-  # Two builds against the same checkout must not overlap: they share module
-  # directories and one ~/.m2, so concurrent writes corrupt silently.
-  local lock="$TMP_ROOT/build.lock" out
-  ( flock 9 || exit 1; sleep 2 ) 9>"$lock" &
-  sleep 0.2
-  out="$( ( flock -n 9 && echo ACQUIRED || echo BLOCKED ) 9>"$lock" )"
-  wait
-  assert_eq "BLOCKED" "$out" "second concurrent build"
+test_worktree_branch_name() {
+  assert_eq "mode/mvn4" "$(worktree_branch mvn4)" "branch name"
+}
+
+test_build_lock_is_exclusive() {
+  local held
+  BUILD_LOCK="$TMP_ROOT/lock"
+  build_lock_acquire || fail "first acquire must succeed"
+  # A second acquirer, simulating another worktree, must be refused while held.
+  held="$( BUILD_LOCK="$TMP_ROOT/lock" bash -c '
+    . '"$LIB_DIR"'/common.sh; . '"$LIB_DIR"'/worktree.sh
+    build_lock_acquire >/dev/null 2>&1 && echo ACQUIRED || echo BLOCKED' )"
+  assert_eq "BLOCKED" "$held" "second concurrent build"
+  build_lock_release
+}
+
+test_build_lock_is_released_and_reacquirable() {
+  BUILD_LOCK="$TMP_ROOT/lock2"
+  build_lock_acquire || fail "acquire"
+  build_lock_release
+  build_lock_acquire || fail "must be re-acquirable after release"
+  build_lock_release
+}
+
+test_build_lock_steals_a_stale_lock() {
+  # A crashed build must not wedge the checkout forever. A lock whose recorded
+  # PID is no longer alive is stale and may be taken.
+  BUILD_LOCK="$TMP_ROOT/lock3"
+  mkdir -p "$BUILD_LOCK"
+  echo 999999 > "$BUILD_LOCK/pid"      # a PID that cannot be running
+  build_lock_acquire || fail "a stale lock must be stealable"
+  build_lock_release
 }
 ```
 
@@ -2092,34 +2116,130 @@ Expected: failure sourcing `switch/lib/worktree.sh` — no such file.
 #
 # Per-mode git worktrees. The directory is the mode: each worktree sits on a
 # `mode/<name>` branch with that mode's aggregator state committed, so nothing
-# needs switching and no working tree is left dirty.
+# needs switching and no working tree is ever left dirty.
 # This file is sourced, never executed.
 
 CHECKOUT_ROOT="$(dirname "$SOURCES_DIR")"
+BUILD_LOCK="${BUILD_LOCK:-$CHECKOUT_ROOT/.mvn-build.lock}"
 
 # worktree_path MODE -> the sibling directory for MODE
 worktree_path() {
   local mode="$1"
-  mode_path "$mode" >/dev/null    # dies if the mode does not exist
+  mode_path "$mode" >/dev/null          # dies if the mode does not exist
   # A SIBLING of sources/ is mandatory. Aggregator modules are referenced as
   # ../../../core/... and resolve against the checkout root, so a worktree at
   # any other depth silently resolves modules to the wrong directories.
   printf '%s/sources-%s\n' "$CHECKOUT_ROOT" "$mode"
 }
 
-# worktree_branch MODE -> the branch name carrying MODE's committed state
 worktree_branch() { printf 'mode/%s\n' "$1"; }
+
+# build_lock_acquire -> 0 when the checkout-wide build lock is held by us
+# All worktrees drive the SAME module directories and one ~/.m2, so two
+# concurrent builds overwrite each other's target/ trees and install the same
+# GAVs over one another. That corrupts silently rather than failing, so the
+# lock is a hard gate, not a warning.
+# `mkdir` is the primitive because macOS has no flock(1).
+build_lock_acquire() {
+  if mkdir "$BUILD_LOCK" 2>/dev/null; then
+    printf '%s\n' "$$" > "$BUILD_LOCK/pid"
+    return 0
+  fi
+  # Held. If the holder is gone, the lock is stale and may be taken —
+  # otherwise a crashed build wedges the checkout permanently.
+  local holder
+  holder="$(cat "$BUILD_LOCK/pid" 2>/dev/null || echo '')"
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    log_error "another build is running in this checkout (pid $holder)"
+    log_error "modes share module directories and ~/.m2; concurrent builds corrupt each other"
+    return 1
+  fi
+  log_warn "removing stale build lock from pid ${holder:-unknown}"
+  rm -rf "$BUILD_LOCK"
+  mkdir "$BUILD_LOCK" 2>/dev/null || return 1
+  printf '%s\n' "$$" > "$BUILD_LOCK/pid"
+  return 0
+}
+
+build_lock_release() {
+  [ -d "$BUILD_LOCK" ] || return 0
+  # Only release a lock we own, so a stale-steal by another process is not
+  # undone by the original holder exiting late.
+  local holder
+  holder="$(cat "$BUILD_LOCK/pid" 2>/dev/null || echo '')"
+  [ "$holder" = "$$" ] || return 0
+  rm -rf "$BUILD_LOCK"
+}
 ```
 
 - [ ] **Step 4: Run the tests and confirm they pass**
 
 Run: `bash switch/test/run-tests.sh`
-Expected: all previous tests plus the three new ones pass.
+Expected: every previous test plus the six new ones pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 cd /Users/slachiewicz/mvn4/sources
 git add switch/lib/worktree.sh switch/test/run-tests.sh
-git commit -m "switch: add per-mode worktree path and branch resolution"
+git commit -m "switch: add worktree resolution and the checkout-wide build lock"
+```
+
+- [ ] **Step 6: Write the `build` wrapper**
+
+Create `build` at the repository root, `chmod 755`:
+
+```bash
+#!/usr/bin/env bash
+# <ASF licence header — copy verbatim from switch/lib/common.sh>
+#
+# Build this worktree's mode. The directory is the mode: the aggregator state
+# is already committed, so there is nothing to switch.
+#
+#   ./build install -DskipTests
+#
+# Takes a checkout-wide lock first: every mode drives the same module
+# directories and one ~/.m2, so two builds at once corrupt each other silently.
+
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SELF_DIR/switch/lib/common.sh"
+. "$SELF_DIR/switch/lib/toolchain.sh"
+. "$SELF_DIR/switch/lib/worktree.sh"
+
+[ -f "$SELF_DIR/.switch-mode" ] || die "not a mode worktree: no .switch-mode here (run 'mvn-switch worktrees --create')"
+MODE="$(cat "$SELF_DIR/.switch-mode")"
+
+runtime="$(mode_runtime "$(mode_path "$MODE")")"
+[ -n "$runtime" ] || die "mode '$MODE' has no [runtime] maven value"
+
+build_lock_acquire || exit 1
+# NOT `exec`: exec replaces this shell and the EXIT trap never runs, leaking
+# the lock and wedging every other worktree until a stale-steal.
+trap build_lock_release EXIT
+
+home="$(toolchain_maven_home "$runtime")"
+log_info "mode $MODE  ->  $home"
+"$home/bin/mvn" "$@"
+```
+
+- [ ] **Step 7: Verify the wrapper refuses a concurrent build**
+
+```bash
+cd /Users/slachiewicz/mvn4/sources
+( . switch/lib/common.sh; . switch/lib/worktree.sh; build_lock_acquire && sleep 5 && build_lock_release ) &
+sleep 1
+( . switch/lib/common.sh; . switch/lib/worktree.sh; build_lock_acquire && echo "ACQUIRED (BAD)" || echo "BLOCKED (correct)" )
+wait
+```
+
+Expected: `BLOCKED (correct)`, plus the two explanatory error lines. Then confirm the lock directory is gone afterwards: `ls -d /Users/slachiewicz/mvn4/.mvn-build.lock` must fail.
+
+- [ ] **Step 8: Commit**
+
+```bash
+cd /Users/slachiewicz/mvn4/sources
+git add build
+git commit -m "switch: add the per-worktree build wrapper with a checkout-wide lock"
 ```
