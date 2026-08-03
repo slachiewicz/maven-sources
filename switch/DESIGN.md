@@ -153,7 +153,8 @@ Plain INI-ish text, parsed with `case`/`read` — no external dependency.
 [runtime]
 maven = 4.0.0-rc-5
 
-[modules]                                   # + activate, - comment out
+[modules]
+# + activate, - comment out
 - ../../../core/maven
 + ../../../core/maven-4.0.x
 - 3.x

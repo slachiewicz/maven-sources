@@ -90,8 +90,18 @@ CHECKOUT_ROOT="${CHECKOUT_ROOT:-$HOME/mvn4}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-$HOME/mvn4-archive}"
 MANIFEST="$ARCHIVE_DIR/MANIFEST.txt"
 
-mkdir -p "$ARCHIVE_DIR"
-: > "$MANIFEST"
+# NOTE: the shipped switch/migrate/archive-all.sh SUPERSEDES this block. It was
+# hardened after review to capture `repo forall`'s real exit status, reject
+# empty output, enforce a MIN_REPOS floor, record a bundle-status column, and
+# exit non-zero if any bundle or metadata read failed. Treat the shipped file
+# as authoritative; two further fixes are required there before Task 6:
+#   1. Create ARCHIVE_DIR and truncate MANIFEST only AFTER the validation
+#      checks pass. Truncating first leaves a zero-byte manifest beside stale
+#      bundles from a previous good run, so the archive directory looks
+#      plausible while describing nothing — and Task 6's gate reads that file.
+#   2. Refuse to proceed if any repository has uncommitted or untracked work.
+#      Bundles capture committed objects only, and `repo` removing an obsolete
+#      project directory takes a dirty worktree with it. Task 6 is irreversible.
 
 cd "$CHECKOUT_ROOT"
 
@@ -327,7 +337,18 @@ mode_path() {
 # mode_runtime MODEFILE -> the [runtime] maven value
 mode_runtime() {
   awk '
-    /^[ \t]*\[/ { section = $0; gsub(/[][ \t]/, "", section); next }
+    { sub(/\r$/, "") }                      # tolerate CRLF mode files
+    /^[ \t]*\[/ {
+      # Take ONLY the bracketed name. Stripping brackets from the whole line
+      # folds a trailing comment into the section name, so `[modules]  # note`
+      # becomes "modules#note" and every module line is skipped — a mode that
+      # silently switches nothing while status reports a clean match.
+      section = $0
+      sub(/^[ \t]*\[/, "", section)
+      sub(/\].*$/, "", section)
+      gsub(/[ \t]/, "", section)
+      next
+    }
     section == "runtime" && /^[ \t]*maven[ \t]*=/ {
       sub(/^[^=]*=[ \t]*/, "")
       sub(/[ \t]+$/, "")
@@ -342,7 +363,18 @@ mode_modules() {
   awk '
     /^[ \t]*#/  { next }
     /^[ \t]*$/  { next }
-    /^[ \t]*\[/ { section = $0; gsub(/[][ \t]/, "", section); next }
+    { sub(/\r$/, "") }                      # tolerate CRLF mode files
+    /^[ \t]*\[/ {
+      # Take ONLY the bracketed name. Stripping brackets from the whole line
+      # folds a trailing comment into the section name, so `[modules]  # note`
+      # becomes "modules#note" and every module line is skipped — a mode that
+      # silently switches nothing while status reports a clean match.
+      section = $0
+      sub(/^[ \t]*\[/, "", section)
+      sub(/\].*$/, "", section)
+      gsub(/[ \t]/, "", section)
+      next
+    }
     section != "modules" { next }
     {
       sign = substr($1, 1, 1)
@@ -603,6 +635,11 @@ agg_set_module() {
   # atomic rename(2) within one filesystem. If $TMPDIR were on another volume,
   # mv would degrade to copy+unlink and a crash mid-copy could leave the real
   # POM partially written.
+  # mktemp creates at 0600 and `mv` carries that mode onto the target, so a
+  # switch would silently reset every POM it touches from 644 to 600. Git
+  # tracks only the exec bit, so this never shows up in `git diff`.
+  # `chmod --reference` is GNU-only; capture the mode the BSD way.
+  local mode_before; mode_before="$(stat -f %Lp "$pom")"
   tmp="$(mktemp "${pom}.XXXXXX")"
   # awk's exit status MUST be checked before the mv. An awk that dies partway
   # through leaves a truncated $tmp, and an unconditional mv would then destroy
@@ -626,6 +663,7 @@ agg_set_module() {
   fi
 
   mv "$tmp" "$pom"
+  chmod "$mode_before" "$pom"
 }
 
 # agg_find_pom ROOT MODULEPATH -> the one POM under ROOT declaring this candidate
@@ -797,7 +835,11 @@ toolchain_current() {
   # this from cmd_status and then does further relative work; a leaked cd would
   # corrupt it in a way that is painful to debug. Safe for every call style,
   # not only command substitution.
-  ( cd -P "$TOOLCHAIN_DIR/current" 2>/dev/null && pwd )
+  # `|| return 0` is load-bearing: a DANGLING `current` symlink passes the
+  # -L test but fails the cd, and this function's contract is "home, or
+  # empty". Returning non-zero here kills `mvn-switch status` outright under
+  # the caller's set -e, before it ever reaches the drift check.
+  ( cd -P "$TOOLCHAIN_DIR/current" 2>/dev/null && pwd ) || return 0
 }
 ```
 
@@ -927,11 +969,15 @@ cmd_apply() {
   local runtime;  runtime="$(mode_runtime "$modefile")"
   [ -n "$runtime" ] || die "mode '$mode' has no [runtime] maven value"
 
-  local changed=0 already=0 line want path pom state rc
+  local changed=0 already=0 want path pom state rc
 
   # Resolve every module to its POM first, so a bad module aborts before any
   # file is written.
   read_modules "$modefile"
+  # A mode that resolves to zero modules is never legitimate — every mode is a
+  # complete description of the toggleable set. Refusing it turns any future
+  # parser gap into a loud failure instead of a silent no-op switch.
+  [ -s "$TMP_MODLIST" ] || die "mode '$mode' resolved to no modules at all; refusing to switch (check its [modules] section)"
   TMP_PLAN="$(mktemp)"
   while IFS='|' read -r want path; do
     [ -n "$path" ] || continue
@@ -1007,21 +1053,32 @@ cmd_status() {
   local home; home="$(toolchain_current)"
   if [ -n "$home" ]; then
     printf 'Maven home:  %s\n' "$home"
-    "$home/bin/mvn" -v 2>/dev/null | head -1
+    # Both halves can fail under `set -o pipefail`: mvn exits non-zero on a
+    # broken JAVA_HOME, and head exiting first can SIGPIPE mvn. Either would
+    # abort cmd_status before the drift report, which is the point of status.
+    "$home/bin/mvn" -v 2>/dev/null | head -1 || true
   else
     log_warn "toolchain/current is not set"
   fi
 
-  local modefile drift=0 want path pom state
+  local modefile drift=0 want path pom state rc
   modefile="$(mode_path "$mode")"
   read_modules "$modefile"
   while IFS='|' read -r want path; do
     [ -n "$path" ] || continue
     # A module that has vanished from the aggregator entirely is the most
     # severe drift there is; report it rather than skipping it silently.
-    if ! pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")"; then
+    pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")" && rc=0 || rc=$?
+    if [ "$rc" -ne 0 ]; then
       [ "$drift" -eq 0 ] && printf '\ndrift from mode %s:\n' "$mode"
-      printf '  %-46s NOT FOUND in any aggregator POM\n' "$path"
+      # Must distinguish 4 from 3: agg_find_pom has already written "declared
+      # in N POMs" plus the competing paths to stderr, so printing NOT FOUND
+      # here would contradict it in the same terminal.
+      if [ "$rc" -eq 4 ]; then
+        printf '  %-46s AMBIGUOUS - declared in more than one POM\n' "$path"
+      else
+        printf '  %-46s NOT FOUND in any aggregator POM\n' "$path"
+      fi
       drift=$((drift + 1))
       continue
     fi
