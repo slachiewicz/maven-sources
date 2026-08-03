@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+# Select the build configuration of this checkout.
+#
+#   ./mvn-switch mvn3 | mvn4 | mvn4-3xplugins [--dry-run]
+#   ./mvn-switch status
+#   ./mvn-switch list
+#   ./mvn-switch cleanup [--apply]
+
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SELF_DIR/switch/lib/common.sh"
+. "$SELF_DIR/switch/lib/aggregator.sh"
+. "$SELF_DIR/switch/lib/toolchain.sh"
+
+STATE_FILE="$SOURCES_DIR/.switch-state"
+
+usage() {
+  cat >&2 <<EOF
+usage: mvn-switch <mode> [--dry-run]
+       mvn-switch status
+       mvn-switch list
+       mvn-switch cleanup [--apply]
+
+modes: $(ls "$MODES_DIR" 2>/dev/null | sed 's/\.mode$//' | tr '\n' ' ')
+EOF
+  exit 1
+}
+
+cmd_list() {
+  local m
+  for m in "$MODES_DIR"/*.mode; do
+    [ -f "$m" ] || continue
+    printf '%-16s runtime %s\n' "$(basename "$m" .mode)" "$(mode_runtime "$m")"
+  done
+}
+
+cmd_apply() {
+  local mode="$1" dry="$2"
+  local modefile; modefile="$(mode_path "$mode")"
+  local runtime;  runtime="$(mode_runtime "$modefile")"
+  [ -n "$runtime" ] || die "mode '$mode' has no [runtime] maven value"
+
+  local changed=0 already=0 line want path pom state
+
+  # Resolve every module to its POM first, so an unknown module aborts before
+  # any file is written.
+  local plan; plan="$(mktemp)"
+  while IFS='|' read -r want path; do
+    [ -n "$path" ] || continue
+    if ! pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")"; then
+      rm -f "$plan"
+      die "module '$path' (mode $mode) is not a candidate in any aggregator POM"
+    fi
+    printf '%s|%s|%s\n' "$want" "$path" "$pom" >> "$plan"
+  done < <(mode_modules "$modefile")
+
+  while IFS='|' read -r want path pom; do
+    state="$(agg_module_state "$pom" "$path")"
+    if [ "$state" = "$want" ]; then
+      already=$((already + 1))
+      continue
+    fi
+    changed=$((changed + 1))
+    if [ "$dry" = "1" ]; then
+      printf 'would set %-3s %s  (%s)\n' "$want" "$path" "${pom#"$SOURCES_DIR"/}"
+    else
+      agg_set_module "$pom" "$path" "$want"
+      printf 'set %-3s %s\n' "$want" "$path"
+    fi
+  done < "$plan"
+  rm -f "$plan"
+
+  local home; home="$(toolchain_maven_home "$runtime")"
+  if [ "$dry" = "1" ]; then
+    printf 'would activate Maven home %s\n' "$home"
+    printf '\ndry run: %d modules would change, %d already correct\n' "$changed" "$already"
+    return 0
+  fi
+
+  toolchain_activate "$home"
+  printf 'mode=%s\nmaven=%s\n' "$mode" "$runtime" > "$STATE_FILE"
+
+  printf '\nmode %s active: %d modules changed, %d already correct\n' "$mode" "$changed" "$already"
+  printf 'Maven home: %s\n' "$home"
+  cat <<EOF
+
+Add this to your shell profile once, if you have not already:
+  export PATH="$SOURCES_DIR/toolchain/current/bin:\$PATH"
+
+Then:
+  cd $AGGREGATOR_DIR && mvn install -DskipTests
+EOF
+}
+
+cmd_status() {
+  if [ ! -f "$STATE_FILE" ]; then
+    echo "no mode active (run: mvn-switch <mode>)"
+    return 0
+  fi
+  local mode; mode="$(awk -F= '$1 == "mode" { print $2 }' "$STATE_FILE")"
+  printf 'active mode: %s\n' "$mode"
+
+  local home; home="$(toolchain_current)"
+  if [ -n "$home" ]; then
+    printf 'Maven home:  %s\n' "$home"
+    "$home/bin/mvn" -v 2>/dev/null | head -1
+  else
+    log_warn "toolchain/current is not set"
+  fi
+
+  local modefile drift=0 want path pom state
+  modefile="$(mode_path "$mode")"
+  while IFS='|' read -r want path; do
+    [ -n "$path" ] || continue
+    pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")" || continue
+    state="$(agg_module_state "$pom" "$path")"
+    if [ "$state" != "$want" ]; then
+      [ "$drift" -eq 0 ] && printf '\ndrift from mode %s:\n' "$mode"
+      printf '  %-46s is %-3s expected %s\n' "$path" "$state" "$want"
+      drift=$((drift + 1))
+    fi
+  done < <(mode_modules "$modefile")
+  [ "$drift" -eq 0 ] && printf '\naggregator matches mode %s\n' "$mode"
+  return 0
+}
+
+[ $# -ge 1 ] || usage
+
+case "$1" in
+  status)  cmd_status ;;
+  list)    cmd_list ;;
+  cleanup)
+    if [ -f "$SELF_DIR/switch/lib/cleanup.sh" ]; then
+      . "$SELF_DIR/switch/lib/cleanup.sh"
+      shift
+      cleanup_main "$@"
+    else
+      die "cleanup is not implemented yet"
+    fi
+    ;;
+  -h|--help) usage ;;
+  *)
+    mode="$1"; shift
+    dry=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --dry-run) dry=1 ;;
+        *) usage ;;
+      esac
+      shift
+    done
+    cmd_apply "$mode" "$dry"
+    ;;
+esac
