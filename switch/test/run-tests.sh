@@ -191,6 +191,44 @@ test_fully_bracketed_comment_is_not_a_candidate() {
   assert_status 3 "$rc" "bracketed comment exit"
 }
 
+test_find_pom_locates_declaring_file() {
+  local p; p="$(fixture)"
+  assert_eq "$p" "$(agg_find_pom "$TMP_ROOT" '../../../core/maven')" "found pom"
+}
+
+test_find_pom_exits_3_when_absent() {
+  local rc; fixture >/dev/null
+  agg_find_pom "$TMP_ROOT" 'no-such-module' >/dev/null 2>&1 && rc=0 || rc=$?
+  assert_status 3 "$rc" "absent module exit"
+}
+
+test_find_pom_exits_4_when_ambiguous() {
+  local rc; fixture >/dev/null
+  mkdir -p "$TMP_ROOT/second"
+  cp "$TEST_DIR/fixtures/sample-pom.xml" "$TMP_ROOT/second/pom.xml"
+  agg_find_pom "$TMP_ROOT" '../../../core/maven' >/dev/null 2>&1 && rc=0 || rc=$?
+  assert_status 4 "$rc" "ambiguous module exit"
+}
+
+test_set_module_aborts_without_writing_when_awk_fails() {
+  local p original rc; p="$(fixture)"
+  original="$(cat "$p")"
+  # Shadow awk with a stub that fails after emitting a partial file, proving the
+  # exit-status guard runs before the mv.
+  mkdir -p "$TMP_ROOT/bin"
+  printf '#!/bin/sh\nhead -2 "$4"\nexit 5\n' > "$TMP_ROOT/bin/awk"
+  chmod +x "$TMP_ROOT/bin/awk"
+  ( PATH="$TMP_ROOT/bin:$PATH"; agg_set_module "$p" '../../../core/maven' off ) >/dev/null 2>&1 && rc=0 || rc=$?
+  assert_eq "$original" "$(cat "$p")" "POM must be unmodified after awk failure"
+  [ "$rc" -ne 0 ] || fail "agg_set_module must exit non-zero when awk fails"
+}
+
+test_set_module_leaves_no_temp_files_behind() {
+  local p; p="$(fixture)"
+  agg_set_module "$p" '../../../core/maven' off
+  assert_eq "" "$(find "$TMP_ROOT" -name 'pom.xml.*' -print)" "leftover temp files"
+}
+
 test_set_module_leaves_other_lines_untouched() {
   local p; p="$(fixture)"
   agg_set_module "$p" '../../../core/maven' off

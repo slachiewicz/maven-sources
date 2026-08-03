@@ -51,8 +51,15 @@ agg_set_module() {
   current="$(agg_module_state "$pom" "$mod")" || return 3
   [ "$current" = "$want" ] && return 0
 
-  tmp="$(mktemp)"
-  awk -v mod="$mod" -v want="$want" '
+  # Create the temp file NEXT TO the target, not in $TMPDIR: `mv` is only an
+  # atomic rename(2) within one filesystem. If $TMPDIR were on another volume,
+  # mv would degrade to copy+unlink and a crash mid-copy could leave the real
+  # POM partially written.
+  tmp="$(mktemp "${pom}.XXXXXX")"
+  # awk's exit status MUST be checked before the mv. An awk that dies partway
+  # through leaves a truncated $tmp, and an unconditional mv would then destroy
+  # the POM's module list.
+  if ! awk -v mod="$mod" -v want="$want" '
     {
       t = $0
       gsub(/^[ \t]+|[ \t]+$/, "", t)
@@ -65,7 +72,10 @@ agg_set_module() {
       }
       print
     }
-  ' "$pom" > "$tmp"
+  ' "$pom" > "$tmp"; then
+    rm -f "$tmp"
+    die "agg_set_module: awk failed rewriting $pom (POM left unmodified)"
+  fi
 
   mv "$tmp" "$pom"
 }
