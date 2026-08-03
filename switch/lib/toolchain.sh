@@ -116,5 +116,9 @@ toolchain_current() {
   # this from cmd_status and then does further relative work; a leaked cd would
   # corrupt it in a way that is painful to debug. Safe for every call style,
   # not only command substitution.
-  ( cd -P "$TOOLCHAIN_DIR/current" 2>/dev/null && pwd )
+  # `|| return 0` is load-bearing: a DANGLING `current` symlink passes the
+  # -L test but fails the cd, and this function's contract is "home, or
+  # empty". Returning non-zero here kills `mvn-switch status` outright under
+  # the caller's set -e, before it ever reaches the drift check.
+  ( cd -P "$TOOLCHAIN_DIR/current" 2>/dev/null && pwd ) || return 0
 }

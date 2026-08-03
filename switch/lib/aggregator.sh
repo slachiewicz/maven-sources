@@ -55,6 +55,11 @@ agg_set_module() {
   # atomic rename(2) within one filesystem. If $TMPDIR were on another volume,
   # mv would degrade to copy+unlink and a crash mid-copy could leave the real
   # POM partially written.
+  # mktemp creates at 0600 and `mv` carries that mode onto the target, so a
+  # switch would silently reset every POM it touches from 644 to 600. Git
+  # tracks only the exec bit, so this never shows up in `git diff`.
+  # `chmod --reference` is GNU-only; capture the mode the BSD way.
+  local mode_before; mode_before="$(stat -f %Lp "$pom")"
   tmp="$(mktemp "${pom}.XXXXXX")"
   # awk's exit status MUST be checked before the mv. An awk that dies partway
   # through leaves a truncated $tmp, and an unconditional mv would then destroy
@@ -78,6 +83,7 @@ agg_set_module() {
   fi
 
   mv "$tmp" "$pom"
+  chmod "$mode_before" "$pom"
 }
 
 # agg_find_pom ROOT MODULEPATH -> the one POM under ROOT declaring this candidate

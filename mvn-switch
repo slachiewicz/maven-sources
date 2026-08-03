@@ -163,21 +163,32 @@ cmd_status() {
   local home; home="$(toolchain_current)"
   if [ -n "$home" ]; then
     printf 'Maven home:  %s\n' "$home"
-    "$home/bin/mvn" -v 2>/dev/null | head -1
+    # Both halves can fail under `set -o pipefail`: mvn exits non-zero on a
+    # broken JAVA_HOME, and head exiting first can SIGPIPE mvn. Either would
+    # abort cmd_status before the drift report, which is the point of status.
+    "$home/bin/mvn" -v 2>/dev/null | head -1 || true
   else
     log_warn "toolchain/current is not set"
   fi
 
-  local modefile drift=0 want path pom state
+  local modefile drift=0 want path pom state rc
   modefile="$(mode_path "$mode")"
   read_modules "$modefile"
   while IFS='|' read -r want path; do
     [ -n "$path" ] || continue
     # A module that has vanished from the aggregator entirely is the most
     # severe drift there is; report it rather than skipping it silently.
-    if ! pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")"; then
+    pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")" && rc=0 || rc=$?
+    if [ "$rc" -ne 0 ]; then
       [ "$drift" -eq 0 ] && printf '\ndrift from mode %s:\n' "$mode"
-      printf '  %-46s NOT FOUND in any aggregator POM\n' "$path"
+      # Must distinguish 4 from 3: agg_find_pom has already written "declared
+      # in N POMs" plus the competing paths to stderr, so printing NOT FOUND
+      # here would contradict it in the same terminal.
+      if [ "$rc" -eq 4 ]; then
+        printf '  %-46s AMBIGUOUS - declared in more than one POM\n' "$path"
+      else
+        printf '  %-46s NOT FOUND in any aggregator POM\n' "$path"
+      fi
       drift=$((drift + 1))
       continue
     fi
