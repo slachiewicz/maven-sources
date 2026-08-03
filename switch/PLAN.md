@@ -508,10 +508,26 @@ test_find_pom_exits_4_when_ambiguous() {
 test_set_module_aborts_without_writing_when_awk_fails() {
   local p original rc; p="$(fixture)"
   original="$(cat "$p")"
-  # Shadow awk with a stub that fails after emitting a partial file, proving the
-  # exit-status guard runs before the mv.
+  # Shadow awk with a stub that fails ONLY the rewrite invocation, emitting a
+  # partial file first. It must delegate every other awk call to the real
+  # binary: a stub that fails indiscriminately also intercepts
+  # agg_module_state's internal awk, so the function would abort on the
+  # pre-existing exit-3 path and the test would pass against vulnerable code
+  # too. The rewrite call is the only one passing a `want=` variable.
   mkdir -p "$TMP_ROOT/bin"
-  printf '#!/bin/sh\nhead -2 "$4"\nexit 5\n' > "$TMP_ROOT/bin/awk"
+  cat > "$TMP_ROOT/bin/awk" <<'STUB'
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+    want=*)
+      for last in "$@"; do :; done   # last argument is the POM path
+      head -2 "$last"                # emit a truncated file, then fail
+      exit 5
+      ;;
+  esac
+done
+exec /usr/bin/awk "$@"
+STUB
   chmod +x "$TMP_ROOT/bin/awk"
   ( PATH="$TMP_ROOT/bin:$PATH"; agg_set_module "$p" '../../../core/maven' off ) >/dev/null 2>&1 && rc=0 || rc=$?
   assert_eq "$original" "$(cat "$p")" "POM must be unmodified after awk failure"
@@ -643,7 +659,7 @@ agg_find_pom() {
 /Users/slachiewicz/mvn4/sources/switch/test/run-tests.sh
 ```
 
-Expected: `20 passed, 0 failed`.
+Expected: `19 passed, 0 failed` (3 from Task 2, 11 original, 5 new).
 
 - [ ] **Step 6: Commit**
 
