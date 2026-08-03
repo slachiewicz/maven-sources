@@ -881,6 +881,26 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 STATE_FILE="$SOURCES_DIR/.switch-state"
 
+# Temp files are script-global and cleaned by a trap, so a `die` from inside a
+# loop body cannot leak them. `rm -f ""` is a harmless no-op when unset.
+TMP_PLAN=""
+TMP_MODLIST=""
+trap 'rm -f "$TMP_PLAN" "$TMP_MODLIST"' EXIT
+
+# read_modules MODEFILE -> populates TMP_MODLIST, dies if the mode file is
+# malformed. Do NOT feed a loop with `< <(mode_modules …)`: process
+# substitution is not covered by `pipefail` and its exit status is invisible,
+# so `mode_modules`' exit 2 on a malformed [modules] line would be swallowed
+# and the loop would silently process a TRUNCATED module list as if complete —
+# the exact partial-application failure the two-pass design exists to prevent.
+read_modules() {
+  local modefile="$1"
+  TMP_MODLIST="$(mktemp)"
+  if ! mode_modules "$modefile" > "$TMP_MODLIST"; then
+    die "mode file '$modefile' has a malformed [modules] section; nothing was changed"
+  fi
+}
+
 usage() {
   cat >&2 <<EOF
 usage: mvn-switch <mode> [--dry-run]
@@ -907,19 +927,26 @@ cmd_apply() {
   local runtime;  runtime="$(mode_runtime "$modefile")"
   [ -n "$runtime" ] || die "mode '$mode' has no [runtime] maven value"
 
-  local changed=0 already=0 line want path pom state
+  local changed=0 already=0 line want path pom state rc
 
-  # Resolve every module to its POM first, so an unknown module aborts before
-  # any file is written.
-  local plan; plan="$(mktemp)"
+  # Resolve every module to its POM first, so a bad module aborts before any
+  # file is written.
+  read_modules "$modefile"
+  TMP_PLAN="$(mktemp)"
   while IFS='|' read -r want path; do
     [ -n "$path" ] || continue
-    if ! pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")"; then
-      rm -f "$plan"
-      die "module '$path' (mode $mode) is not a candidate in any aggregator POM"
+    pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")" && rc=0 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      # Distinguish the two failures: agg_find_pom already logged the competing
+      # paths for the ambiguous case, so claiming "not a candidate" there would
+      # contradict it.
+      case "$rc" in
+        4) die "module '$path' (mode $mode) is declared in more than one aggregator POM (listed above); nothing was changed" ;;
+        *) die "module '$path' (mode $mode) is not a candidate in any aggregator POM; nothing was changed" ;;
+      esac
     fi
-    printf '%s|%s|%s\n' "$want" "$path" "$pom" >> "$plan"
-  done < <(mode_modules "$modefile")
+    printf '%s|%s|%s\n' "$want" "$path" "$pom" >> "$TMP_PLAN"
+  done < "$TMP_MODLIST"
 
   while IFS='|' read -r want path pom; do
     state="$(agg_module_state "$pom" "$path")"
@@ -934,16 +961,26 @@ cmd_apply() {
       agg_set_module "$pom" "$path" "$want"
       printf 'set %-3s %s\n' "$want" "$path"
     fi
-  done < "$plan"
-  rm -f "$plan"
+  done < "$TMP_PLAN"
 
-  local home; home="$(toolchain_maven_home "$runtime")"
+  local home
   if [ "$dry" = "1" ]; then
+    # A dry run must write NOTHING. toolchain_maven_home downloads and extracts
+    # a distribution when the version is absent, so it must not be called here
+    # for an uncached version — report the intent instead.
+    if [ "$runtime" = "system" ]; then
+      home="$(toolchain_maven_home system)"
+    elif [ -x "$TOOLCHAIN_DIR/apache-maven-$runtime/bin/mvn" ]; then
+      home="$TOOLCHAIN_DIR/apache-maven-$runtime"
+    else
+      home="(not yet downloaded; would fetch Maven $runtime into $TOOLCHAIN_DIR)"
+    fi
     printf 'would activate Maven home %s\n' "$home"
     printf '\ndry run: %d modules would change, %d already correct\n' "$changed" "$already"
     return 0
   fi
 
+  home="$(toolchain_maven_home "$runtime")"
   toolchain_activate "$home"
   printf 'mode=%s\nmaven=%s\n' "$mode" "$runtime" > "$STATE_FILE"
 
@@ -977,16 +1014,24 @@ cmd_status() {
 
   local modefile drift=0 want path pom state
   modefile="$(mode_path "$mode")"
+  read_modules "$modefile"
   while IFS='|' read -r want path; do
     [ -n "$path" ] || continue
-    pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")" || continue
+    # A module that has vanished from the aggregator entirely is the most
+    # severe drift there is; report it rather than skipping it silently.
+    if ! pom="$(agg_find_pom "$AGGREGATOR_DIR" "$path")"; then
+      [ "$drift" -eq 0 ] && printf '\ndrift from mode %s:\n' "$mode"
+      printf '  %-46s NOT FOUND in any aggregator POM\n' "$path"
+      drift=$((drift + 1))
+      continue
+    fi
     state="$(agg_module_state "$pom" "$path")"
     if [ "$state" != "$want" ]; then
       [ "$drift" -eq 0 ] && printf '\ndrift from mode %s:\n' "$mode"
       printf '  %-46s is %-3s expected %s\n' "$path" "$state" "$want"
       drift=$((drift + 1))
     fi
-  done < <(mode_modules "$modefile")
+  done < "$TMP_MODLIST"
   [ "$drift" -eq 0 ] && printf '\naggregator matches mode %s\n' "$mode"
   return 0
 }
