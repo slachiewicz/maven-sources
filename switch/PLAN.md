@@ -1867,10 +1867,10 @@ cleanup_main() {
 
   {
     printf '\n## Summary\n\n'
-    printf '- total local branches: %d\n' "$total"
-    printf '- redundant (deleted, archived): %d\n' "$redundant"
-    printf '- stale dependabot (deleted, archived): %d\n' "$stale"
-    printf '- kept: %d\n' "$kept"
+    printf -- '- total local branches: %d\n' "$total"
+    printf -- '- redundant (deleted, archived): %d\n' "$redundant"
+    printf -- '- stale dependabot (deleted, archived): %d\n' "$stale"
+    printf -- '- kept: %d\n' "$kept"
     printf '\nEvery branch was tagged `archive/<name>` before any deletion.\n'
     printf 'Recover one with: `git checkout -b <name> archive/<name>`\n'
   } >> "$report"
