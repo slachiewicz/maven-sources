@@ -481,9 +481,40 @@ make_repo() {
   git -C "$d" checkout -q -b keep-me master
   git -C "$d" commit -q --allow-empty -m "unpushed work"
 
-  # stale dependabot: local commits, and no origin/<same name>
+  # stale dependabot: bot-only commit, and no origin/<same name>
   git -C "$d" checkout -q -b dependabot/maven/foo-1.0 master
-  git -C "$d" commit -q --allow-empty -m "bump foo"
+  git -C "$d" -c user.email="dependabot[bot]@users.noreply.github.com" \
+              -c user.name="dependabot[bot]" \
+              commit -q --allow-empty -m "bump foo"
+
+  git -C "$d" checkout -q master
+  printf '%s\n' "$d"
+}
+
+# Same shape as make_repo's dependabot branch, but with a human commit on top
+# of the bot's — the case that must NOT be deleted. People routinely commit
+# fixes on a bump branch and never push them; the branch is disposable only
+# when every unpushed commit is the bot's.
+make_repo_dependabot_with_human_commit() {
+  local d="$TMP_ROOT/repo-mixed" up="$TMP_ROOT/upstream-mixed"
+  git init -q --bare "$up"
+  git init -q -b master "$d"
+  git -C "$d" config user.email t@example.com
+  git -C "$d" config user.name Test
+  git -C "$d" commit -q --allow-empty -m base
+  git -C "$d" remote add origin "$up"
+  git -C "$d" push -q origin master
+  git -C "$d" fetch -q origin
+
+  # no origin/<same name>, so this is orphaned like any stale dependabot branch
+  git -C "$d" checkout -q -b dependabot/maven/bar-2.0 master
+  git -C "$d" -c user.email="dependabot[bot]@users.noreply.github.com" \
+              -c user.name="dependabot[bot]" \
+              commit -q --allow-empty -m "bump bar"
+  # a human commit on top, never pushed
+  git -C "$d" -c user.email="human@example.com" \
+              -c user.name="Human" \
+              commit -q --allow-empty -m "Fix #322: manual follow-up on the bump"
 
   git -C "$d" checkout -q master
   printf '%s\n' "$d"
@@ -502,6 +533,14 @@ test_classify_protects_unpushed_branch() {
 test_classify_marks_orphaned_dependabot_stale() {
   local d; d="$(make_repo)"
   assert_eq "stale-dependabot" "$(cleanup_classify "$d" | awk -F'|' '$1 ~ /^dependabot/ { print $2 }')" "class"
+}
+
+# Discriminating: this must FAIL against the pre-fix classifier (commit
+# 97a8508), which deletes any orphaned dependabot/* branch regardless of what
+# is committed on it, and PASS after the author-only guard is added.
+test_classify_protects_dependabot_branch_with_human_commit() {
+  local d; d="$(make_repo_dependabot_with_human_commit)"
+  assert_eq "local-only" "$(cleanup_classify "$d" | awk -F'|' '$1 ~ /^dependabot/ { print $2 }')" "class"
 }
 
 test_classify_never_touches_current_branch() {
