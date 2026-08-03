@@ -120,4 +120,83 @@ EOF
   assert_eq "" "$(mode_modules "$TMP_ROOT/z.mode")" "modules"
 }
 
+. "$LIB_DIR/aggregator.sh"
+
+fixture() {
+  cp "$TEST_DIR/fixtures/sample-pom.xml" "$TMP_ROOT/pom.xml"
+  printf '%s\n' "$TMP_ROOT/pom.xml"
+}
+
+test_state_reads_active_module() {
+  local p; p="$(fixture)"
+  assert_eq "on" "$(agg_module_state "$p" '../../../core/maven')" "state"
+}
+
+test_state_reads_commented_module() {
+  local p; p="$(fixture)"
+  assert_eq "off" "$(agg_module_state "$p" '../../../core/maven-4.0.x')" "state"
+}
+
+test_state_rejects_unknown_module() {
+  local p rc; p="$(fixture)"
+  agg_module_state "$p" 'nope' >/dev/null 2>&1 && rc=0 || rc=$?
+  assert_status 3 "$rc" "unknown module exit"
+}
+
+test_set_module_off_comments_it_out() {
+  local p; p="$(fixture)"
+  agg_set_module "$p" '../../../core/maven' off
+  assert_file_contains "$p" '    <!--module>../../../core/maven</module-->'
+  assert_eq "off" "$(agg_module_state "$p" '../../../core/maven')" "state after off"
+}
+
+test_set_module_on_uncomments_it() {
+  local p; p="$(fixture)"
+  agg_set_module "$p" '../../../core/maven-4.0.x' on
+  assert_file_contains "$p" '    <module>../../../core/maven-4.0.x</module>'
+}
+
+test_set_module_preserves_indentation() {
+  local p; p="$(fixture)"
+  agg_set_module "$p" '3.x' on
+  assert_file_contains "$p" '    <module>3.x</module>'
+}
+
+test_set_module_is_idempotent() {
+  local p before after; p="$(fixture)"
+  agg_set_module "$p" '../../../core/maven' off
+  before="$(cat "$p")"
+  agg_set_module "$p" '../../../core/maven' off
+  after="$(cat "$p")"
+  assert_eq "$before" "$after" "second off write"
+}
+
+test_round_trip_restores_file_exactly() {
+  local p original; p="$(fixture)"
+  original="$(cat "$p")"
+  agg_set_module "$p" '../../../core/maven' off
+  agg_set_module "$p" '../../../core/maven' on
+  assert_eq "$original" "$(cat "$p")" "round trip"
+}
+
+test_prose_comment_is_not_a_candidate() {
+  local p rc; p="$(fixture)"
+  agg_module_state "$p" '../../../misc/plugin-testing' >/dev/null 2>&1 && rc=0 || rc=$?
+  assert_status 3 "$rc" "prose comment exit"
+}
+
+test_fully_bracketed_comment_is_not_a_candidate() {
+  local p rc; p="$(fixture)"
+  agg_module_state "$p" '../../../svn/repository-tools' >/dev/null 2>&1 && rc=0 || rc=$?
+  assert_status 3 "$rc" "bracketed comment exit"
+}
+
+test_set_module_leaves_other_lines_untouched() {
+  local p; p="$(fixture)"
+  agg_set_module "$p" '../../../core/maven' off
+  assert_file_contains "$p" '    <module>../../../core/build-cache</module>'
+  assert_file_contains "$p" '    <module>../../../core/wrapper</module>'
+  assert_file_contains "$p" '    <!--<module>../../../svn/repository-tools</module>-->'
+}
+
 run_all

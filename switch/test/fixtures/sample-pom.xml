@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modules>
+    <module>../../../core/build-cache</module>
+    <module>../../../core/maven</module>
+    <!--module>../../../core/maven-4.0.x</module-->
+    <module>../../../core/wrapper</module>
+    <!--module>3.x</module-->
+    <!-- misc/plugin-testing merged into apache/maven core, see apache/maven#2193 -->
+    <!--<module>../../../svn/repository-tools</module>-->
+  </modules>
+</project>
