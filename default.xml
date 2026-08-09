@@ -133,7 +133,7 @@
   <project path='misc/dist-tool'                            name='maven-dist-tool.git' />
   <project path='misc/executor'                             name='maven-executor.git' revision="main" />
   <project path='misc/gh-actions-shared/main'               name='maven-gh-actions-shared.git' revision="main" />
-  <project path='misc/gh-actions-shared/v4'                 name='maven-gh-actions-shared.git' revision="v4" />
+  <project path='misc/gh-actions-shared/v5'                 name='maven-gh-actions-shared.git' revision="v5" />
   <project path='misc/jenkins/env'                          name='maven-jenkins-env.git' />
   <project path='misc/jenkins/lib'                          name='maven-jenkins-lib.git' />
   <project path='misc/indexer'                              name='maven-indexer.git' />
