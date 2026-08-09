@@ -65,7 +65,6 @@ under the License.
     <!--module>shared-4</module-->
     <!--module>sisu</module--><!-- disabled: failing for unknown reason -->
     <module>../../site</module>
-    <module>svn</module>
   </modules>
 
   <profiles>
