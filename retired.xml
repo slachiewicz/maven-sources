@@ -24,12 +24,15 @@
   <remote name='svn2git' fetch='https://github.com/apache' />
   <default revision='master' remote='origin' sync-j='8' />
 
+  <project path='plugins/core/maven-verifier-plugin'        name='maven-verifier-plugin.git' />
+
   <project path='plugins/reporting/maven-docck-plugin'      name='maven-docck-plugin.git' />
 
   <project path='plugins/tools/maven-ant-plugin'            name='maven-ant-plugin.git' />
   <project path='plugins/tools/maven-patch-plugin'          name='maven-patch-plugin.git' />
   <project path='plugins/tools/maven-pdf-plugin'            name='maven-pdf-plugin.git' />
   <project path='plugins/tools/maven-repository-plugin'     name='maven-repository-plugin.git' />
+  <project path='plugins/tools/maven-stage-plugin'          name='maven-stage-plugin.git' />
 
   <project path='misc/skins/default'                        name='maven-default-skin.git' />
 

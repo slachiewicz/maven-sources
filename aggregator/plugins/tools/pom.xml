@@ -49,7 +49,6 @@ under the License.
     <module>../../../../plugins/tools/scm</module>
     <module>../../../../plugins/tools/maven-scm-publish-plugin</module>
     <module>../../../../plugins/tools/maven-scripting-plugin</module>
-    <module>../../../../plugins/tools/maven-stage-plugin</module>
     <module>../../../../plugins/tools/maven-toolchains-plugin</module>
   </modules>
 </project>

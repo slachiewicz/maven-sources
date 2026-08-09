@@ -39,6 +39,5 @@ under the License.
     <module>../../../../plugins/core/maven-resources-plugin</module>
     <module>../../../../plugins/core/maven-site-plugin</module>
     <module>../../../../plugins/core/surefire</module>
-    <module>../../../../plugins/core/maven-verifier-plugin</module>
   </modules>
 </project>
