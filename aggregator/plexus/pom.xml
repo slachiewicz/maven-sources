@@ -32,6 +32,7 @@ under the License.
 
   <name>Aggregator POM for Plexus</name>
   <modules>
+    <module>../../../plexus/build-api</module>
     <module>../../../plexus/classworlds</module>
     <module>../../../plexus/codehaus-plexus.github.io</module>
     <module>components</module>
