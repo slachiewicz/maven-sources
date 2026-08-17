@@ -42,7 +42,7 @@ Resulting directory tree looks like:
 |   |-- executor
 |   |-- gh-actions-shared
 |   |   |-- main
-|   |   `-- v4
+|   |   `-- v5
 |   |-- indexer
 |   |-- jenkins
 |   |   |-- env
@@ -69,10 +69,8 @@ Resulting directory tree looks like:
 |   |   |-- languages
 |   |   |-- resources
 |   |   |-- sec-dispatcher
-|   |   |-- testing
 |   |   `-- velocity
 |   |-- modello
-|   |-- plexus-containers
 |   |-- pom
 |   |   `-- plexus
 |   |-- utils
@@ -86,7 +84,6 @@ Resulting directory tree looks like:
 |   |   |-- maven-install-plugin
 |   |   |-- maven-resources-plugin
 |   |   |-- maven-site-plugin
-|   |   |-- maven-verifier-plugin
 |   |   `-- surefire
 |   |-- core-4
 |   |   |-- maven-clean-plugin
@@ -133,7 +130,6 @@ Resulting directory tree looks like:
 |       |-- maven-remote-resources-plugin
 |       |-- maven-scm-publish-plugin
 |       |-- maven-scripting-plugin
-|       |-- maven-stage-plugin
 |       |-- maven-toolchains-plugin
 |       |-- plugin-tools
 |       |-- release
