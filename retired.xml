@@ -27,12 +27,18 @@
   <project path='plugins/core/maven-verifier-plugin'        name='maven-verifier-plugin.git' />
 
   <project path='plugins/reporting/maven-docck-plugin'      name='maven-docck-plugin.git' />
+  <project path='plugins/reporting/maven-linkcheck-plugin'  name='maven-linkcheck-plugin.git' />
 
   <project path='plugins/tools/maven-ant-plugin'            name='maven-ant-plugin.git' />
   <project path='plugins/tools/maven-patch-plugin'          name='maven-patch-plugin.git' />
   <project path='plugins/tools/maven-pdf-plugin'            name='maven-pdf-plugin.git' />
   <project path='plugins/tools/maven-repository-plugin'     name='maven-repository-plugin.git' />
   <project path='plugins/tools/maven-stage-plugin'          name='maven-stage-plugin.git' />
+
+  <project path='doxia/site'                                name='maven-doxia-site.git' />
+  <project path='doxia/tools/doxia-book-maven-plugin'       name='maven-doxia-book-maven-plugin.git' />
+  <project path='doxia/tools/doxia-book-renderer'           name='maven-doxia-book-renderer.git' />
+  <project path='doxia/tools/linkcheck'                     name='maven-doxia-linkcheck.git' />
 
   <project path='misc/skins/default'                        name='maven-default-skin.git' />
 
@@ -47,6 +53,7 @@
   <project path='svn/repository-tools'                      name='maven-repository-tools.git'    revision='trunk' />
   <project path='svn/sandbox'                               name='maven-sandbox.git'             revision='trunk' />
   <project path='svn/doxia-ide'                             name='maven-doxia-ide.git'           revision='trunk' />
+
   <project path='plexus/components/cipher'                  name='plexus-cipher.git'             remote='plexus' />
   <project path='plexus/components/cli'                     name='plexus-cli.git'                remote='plexus' />
   <project path='plexus/components/digest'                  name='plexus-digest.git'             remote='plexus' />
